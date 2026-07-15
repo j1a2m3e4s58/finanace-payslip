@@ -1,0 +1,57 @@
+services:
+  - type: web
+    name: bawjiase-payslip-platform
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /api/health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bawjiase-payslip-database
+          property: connectionString
+      - key: REQUIRE_POSTGRESQL
+        value: "true"
+      - key: PORTAL_DATA_DIR
+        value: /var/lib/bcb
+      - key: BACKUP_DIR
+        value: /var/lib/bcb/backups
+      - key: PAYSLIP_WORKER_MODE
+        value: embedded
+      - key: FORCE_HTTPS
+        value: "true"
+      - key: ALLOW_SELF_REGISTRATION
+        value: "true"
+      - key: DATA_ENCRYPTION_KEY
+        sync: false
+      - key: MFA_ENCRYPTION_KEY
+        sync: false
+      - key: BACKUP_ENCRYPTION_KEY
+        sync: false
+      - key: MAIL_SERVER
+        sync: false
+      - key: MAIL_PORT
+        value: "465"
+      - key: MAIL_SECURITY
+        value: ssl
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false
+      - key: MAIL_SENDER
+        sync: false
+      - key: PASSWORD_RESET_BASE_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+    disk:
+      name: bawjiase-payslip-data
+      mountPath: /var/lib/bcb
+      sizeGB: 5
+
+databases:
+  - name: bawjiase-payslip-database
+    plan: basic-256mb
+    databaseName: bcb_payslip
+    user: bcb_app

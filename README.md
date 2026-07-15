@@ -1,0 +1,81 @@
+# Bawjiase Community Bank Payslip Platform
+
+Responsive React and Flask payroll application for staff records, monthly payroll preparation, maker-checker approval, confidential PDF payslips, private bulk delivery, reports, audit logs, and user access control.
+
+## Local development
+
+```powershell
+npm install
+pip install -r mail-api/requirements.txt
+$env:PORT = "4190"
+python mail-api/app.py
+```
+
+In another terminal:
+
+```powershell
+npm run dev
+```
+
+Open `http://localhost:5173`. Local development uses SQLite in `mail-api/data`; production uses PostgreSQL through `DATABASE_URL`.
+
+## Required production secrets
+
+Copy `.env.production.example` to `.env.production` and replace every placeholder. Generate independent Fernet keys with:
+
+```powershell
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Do not reuse encryption keys and never commit `.env.production`. Sensitive settings also support Docker/Kubernetes secret files by setting `NAME_FILE` instead of `NAME` (for example, `MAIL_PASSWORD_FILE`). MFA enrollment remains unavailable until an MFA or data encryption key is configured. Public registration is disabled by default; administrators create accounts from Users & Access.
+
+## Checks
+
+```powershell
+npm run check
+```
+
+This runs ESLint, the production frontend build, database/security/payroll unit tests, and Python imports used by the tests.
+
+## Staging and production
+
+1. Install Docker and Docker Compose on a controlled server.
+2. Put the TLS certificate and private key at `deploy/certs/fullchain.pem` and `deploy/certs/privkey.pem`.
+3. Configure `.env.production` with PostgreSQL, encryption, SMTP, origin, and webhook secrets.
+4. Start with `docker compose up -d --build`.
+5. Verify `https://your-host/api/health`, then test with non-production staff and payroll data.
+6. Complete the pilot checklist below before importing real payroll data.
+
+The application container runs Waitress, PostgreSQL stores all application documents transactionally, nginx terminates HTTPS, and a dedicated worker resumes unfinished email deliveries after a restart. Production startup refuses SQLite when `REQUIRE_POSTGRESQL=true`. Keep the app and worker services running together.
+
+### Render deployment
+
+The included `render.yaml` creates a Docker web service, PostgreSQL database, persistent encrypted-backup/upload disk, HTTPS enforcement, and durable embedded delivery worker. In Render, create a Blueprint from the repository, enter every environment value marked `sync: false`, and generate valid independent Fernet keys for the three encryption-key fields before the first deployment. Set `ALLOWED_ORIGINS` and `PASSWORD_RESET_BASE_URL` to the final Render HTTPS URL. Do not import real staff or payroll information until the health check passes and SMTP, reset email, upload protection, PDF generation, delivery retry, and backup restore have been tested in staging.
+
+Install and update the malware scanner used by `MALWARE_SCANNER_COMMAND` (the supplied container installs ClamAV). Production uploads fail closed when the configured scanner is unavailable. Schedule signature updates on the host or rebuild the container regularly.
+
+## Backups and recovery
+
+Encrypted backups run according to the Settings schedule and are written to `BACKUP_DIR`. Retention is controlled by `BACKUP_RETENTION_COUNT`. A Super Admin can also export and restore encrypted backups from Settings. Keep a copy of `BACKUP_ENCRYPTION_KEY` in the bank's approved secrets vault and test restoration in staging every quarter.
+
+Audit, payroll, and delivery-log retention periods are controlled in Settings and every change is audited. Those fields define policy; immutable payroll and audit history is not silently deleted. Use the bank's approved archive and disposal procedure before removing historical records.
+
+## Operations and monitoring
+
+- Monitor `/api/health` for database and pending-queue health. A Super Admin can inspect the non-sensitive count snapshot at `/api/metrics`.
+- Alert when the health endpoint fails, pending deliveries grow continuously, or `Failed`/`Bounced` email counts rise.
+- Rotate SMTP, webhook, encryption, and backup secrets according to bank policy. Rotation of encryption keys must include a tested data re-encryption or restore plan.
+- Test SMTP outage recovery, duplicate-send prevention, provider bounce webhooks, password reset email delivery, and backup restoration in staging before each production release.
+- Forward container logs to restricted centralized storage and retain them according to the bank's security policy. Request IDs are returned in `X-Request-ID` and timing is exposed through `Server-Timing` for incident tracing.
+
+## Pilot checklist
+
+- Create separate Finance Officer and Finance Approver accounts and enable MFA.
+- Import a small CSV/Excel staff list and correct every preview error.
+- Create a test payroll, confirm calculations, submit it, and approve it using a different account.
+- Preview individual PDFs and the ZIP; confirm confidentiality and password rules.
+- Send a test email, then a small approved batch; confirm no recipient can see another address.
+- Force one delivery failure and confirm retry/audit reporting.
+- Create, download, and restore an encrypted backup in staging.
+- Check the dashboard and critical pages on mobile, tablet, and desktop.
+- Review audit logs, HTTPS headers, session timeout, account lockout, and inactive-staff exclusion.
