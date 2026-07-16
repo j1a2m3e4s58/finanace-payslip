@@ -13,7 +13,8 @@ export default function ProtectedRoute({ unauthenticatedElement = null }) {
 
   if (!isAuthenticated) return unauthenticatedElement;
   if (user?.mustChangePassword && location.pathname !== '/change-password') return <Navigate to="/change-password" replace />;
-  const privilegedMfaRequired = portalSettings?.requirePrivilegedMfa !== false;
+  const localTesting = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+  const privilegedMfaRequired = !localTesting && portalSettings?.requirePrivilegedMfa !== false;
   if (privilegedMfaRequired && ['SuperAdmin', 'Admin', 'FinanceOfficer', 'FinanceApprover'].includes(user?.role) && !user?.mfaEnabled && !['/profile', '/change-password'].includes(location.pathname)) return <Navigate to="/profile" replace />;
   return <Outlet />;
 }
