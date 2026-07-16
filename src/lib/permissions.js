@@ -64,8 +64,9 @@ export function roleLabel(role) {
   return ROLE_OPTIONS.find((item) => item.value === normalizeRole(role))?.label || 'Management';
 }
 
-export function firstAllowedPath(user) {
+export function firstAllowedPath(user, settings = {}) {
   if (user?.mustChangePassword) return '/change-password';
-  if (['SuperAdmin', 'Admin', 'FinanceOfficer', 'FinanceApprover'].includes(user?.role) && !user?.mfaEnabled) return '/profile';
+  const privilegedMfaRequired = settings?.requirePrivilegedMfa !== false;
+  if (privilegedMfaRequired && ['SuperAdmin', 'Admin', 'FinanceOfficer', 'FinanceApprover'].includes(user?.role) && !user?.mfaEnabled) return '/profile';
   return Object.entries(routePermissions).find(([, permission]) => hasPermission(user, permission))?.[0] || '/profile';
 }

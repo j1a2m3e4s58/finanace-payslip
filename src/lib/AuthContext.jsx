@@ -83,7 +83,7 @@ export const AuthProvider = ({ children }) => {
     user, portalSettings, isAuthenticated: Boolean(user), isLoadingAuth, isLoadingPublicSettings,
     authError: null, appPublicSettings: portalSettings, authChecked: !isLoadingAuth,
     refreshPortalSettings, login, logout, setUser, updateUser, can,
-    firstAllowedPath: () => firstAllowedPath(user),
+    firstAllowedPath: () => firstAllowedPath(user, portalSettings),
     checkUserAuth: async () => {}, checkAppState: async () => {},
     navigateToLogin: () => { window.location.href = '/login'; },
   }), [user, portalSettings, isLoadingAuth, isLoadingPublicSettings, refreshPortalSettings, login, logout, updateUser, can]);

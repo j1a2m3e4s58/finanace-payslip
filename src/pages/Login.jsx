@@ -33,7 +33,7 @@ export default function Login() {
     try {
       const authenticatedUser = await login(email, password, mfaCode);
       window.sessionStorage.removeItem('bcb_session_message');
-      navigate(getFirstAllowedPath(authenticatedUser), { replace: true });
+      navigate(getFirstAllowedPath(authenticatedUser, portalSettings), { replace: true });
     } catch (err) {
       if (err.mfaRequired) setMfaRequired(true);
       toast.error(err.message || "Invalid email or password", { title: err.mfaRequired ? 'Verification required' : 'Login failed' });
