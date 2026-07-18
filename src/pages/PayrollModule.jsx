@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertCircle, AlertTriangle, Calculator, CheckCircle2, ClipboardCheck, Clock3, Edit3, FileText, MessageSquareWarning, Plus, Save, Send, X, XCircle } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Calculator, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Cloud, CloudOff, Edit3, FileText, Loader2, Lock, MessageSquareWarning, Plus, Save, Send, X, XCircle } from 'lucide-react';
 import { approvePayrollBatch, cancelPayrollBatch, createPayrollBatch, decidePayrollBatch, getPayrollBatch, getPayrollBatches, revisePayrollBatch, savePayrollDraft, submitPayrollBatch } from '@/api/portalClient';
 import { PageHeader, PrimaryButton, SearchBox, SecondaryButton, StatusBadge } from '@/components/payroll/PageElements';
 import { useAuth } from '@/lib/AuthContext';
@@ -22,6 +22,7 @@ export const deductionFields = [
 ];
 const manualFields = [...incomeFields.map(([key]) => key), ...deductionFields.filter(([, , automatic]) => !automatic).map(([key]) => key)];
 const trackedFields = [...manualFields, 'ssf', 'esp', 'pf', 'totalIncome', 'totalDeductions', 'netSalary', 'employerSsf', 'employerPf'];
+const payrollPageSize = 8;
 
 export function calculateEntry(entry) {
   const next = { ...entry };
@@ -138,48 +139,167 @@ export function PayrollEntry() {
   const [query, setQuery] = useState('');
   const [department, setDepartment] = useState('all');
   const [branch, setBranch] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [expandedStaffId, setExpandedStaffId] = useState(null);
+  const [page, setPage] = useState(1);
+  const [dirty, setDirty] = useState(false);
+  const [saveState, setSaveState] = useState({ kind: 'saved', at: null });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [cancelReason, setCancelReason] = useState(null);
-  useEffect(() => { if (!batchId) return; getPayrollBatch(batchId).then((result) => { setBatch(result); setEntries(result.entries.map(calculateEntry)); }).catch((err) => setError(err.message)); }, [batchId]);
+  const entriesRef = useRef([]);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
+  useEffect(() => {
+    if (!batchId) return;
+    getPayrollBatch(batchId).then((result) => {
+      const loaded = result.entries.map(calculateEntry);
+      setBatch(result);
+      setEntries(loaded);
+      entriesRef.current = loaded;
+      setExpandedStaffId(loaded[0]?.staffRecordId || null);
+      setDirty(false);
+      setSaveState({ kind: 'saved', at: result.updatedAt || null });
+    }).catch((err) => setError(err.message));
+  }, [batchId]);
   const editable = ['draft', 'rejected', 'corrected'].includes(batch?.status) && can('payroll.prepare');
   const departments = [...new Set(entries.map((item) => item.department).filter(Boolean))].sort();
   const branches = [...new Set(entries.map((item) => item.branch).filter(Boolean))].sort();
-  const visible = useMemo(() => entries.filter((entry) => Object.values(entry).join(' ').toLowerCase().includes(query.toLowerCase()) && (department === 'all' || entry.department === department) && (branch === 'all' || entry.branch === branch)), [entries, query, department, branch]);
   const baselineByStaff = useMemo(() => Object.fromEntries((batch?.baselineEntries || []).map((entry) => [entry.staffRecordId, entry])), [batch]);
-  const issuesFor = (entry) => { const issues = entryIssues(entry); if (entryHasChanges(entry, baselineByStaff[entry.staffRecordId]) && !String(entry.changeReason || '').trim()) issues.push('Reason for change required'); return issues; };
-  const invalid = entries.map((entry) => ({ entry, issues: issuesFor(entry) })).filter((item) => item.issues.length);
+  const entryRows = useMemo(() => entries.map((entry) => {
+    const changed = entryHasChanges(entry, baselineByStaff[entry.staffRecordId]);
+    const issues = entryIssues(entry);
+    if (changed && !String(entry.changeReason || '').trim()) issues.push('Reason for change required');
+    return { entry, changed, issues, fieldIssues: payrollFieldIssues(entry) };
+  }), [entries, baselineByStaff]);
+  const invalid = entryRows.filter((item) => item.issues.length);
+  const completed = entryRows.length - invalid.length;
+  const filtered = useMemo(() => entryRows.filter(({ entry, changed, issues }) => {
+    const matchesText = Object.values(entry).join(' ').toLowerCase().includes(query.toLowerCase());
+    const matchesOrganization = (department === 'all' || entry.department === department) && (branch === 'all' || entry.branch === branch);
+    const matchesStatus = statusFilter === 'all' || (statusFilter === 'attention' && issues.length > 0) || (statusFilter === 'changed' && changed) || (statusFilter === 'ready' && issues.length === 0);
+    return matchesText && matchesOrganization && matchesStatus;
+  }), [entryRows, query, department, branch, statusFilter]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / payrollPageSize));
+  const safePage = Math.min(page, pageCount);
+  const pageStart = (safePage - 1) * payrollPageSize;
+  const pagedEntries = filtered.slice(pageStart, pageStart + payrollPageSize);
+  useEffect(() => { setPage(1); }, [query, department, branch, statusFilter]);
+  useEffect(() => {
+    if (!pagedEntries.some(({ entry }) => entry.staffRecordId === expandedStaffId)) setExpandedStaffId(pagedEntries[0]?.entry.staffRecordId || null);
+  }, [pagedEntries, expandedStaffId]);
   const totals = useMemo(() => entries.reduce((sum, entry) => ({ income: sum.income + Number(entry.totalIncome || 0), deductions: sum.deductions + Number(entry.totalDeductions || 0), net: sum.net + Number(entry.netSalary || 0), employerSsf: sum.employerSsf + Number(entry.employerSsf || 0), employerPf: sum.employerPf + Number(entry.employerPf || 0) }), { income: 0, deductions: 0, net: 0, employerSsf: 0, employerPf: 0 }), [entries]);
-  const update = (staffRecordId, field, raw) => setEntries((current) => current.map((entry) => entry.staffRecordId === staffRecordId ? calculateEntry({ ...entry, [field]: field === 'changeReason' ? raw : raw === '' ? null : Number(raw) }) : entry));
-  const save = async (quiet = false) => { setBusy(true); try { const saved = await savePayrollDraft(batchId, entries); setBatch(saved); setEntries(saved.entries.map(calculateEntry)); setError(''); if (!quiet) toast.success('All current salary entries were saved safely.', { title: 'Payroll draft saved' }); return saved; } catch (err) { toast.error(err.message, { title: 'Payroll draft was not saved' }); return null; } finally { setBusy(false); } };
+  const update = useCallback((staffRecordId, field, raw) => {
+    setEntries((current) => current.map((entry) => entry.staffRecordId === staffRecordId ? calculateEntry({ ...entry, [field]: field === 'changeReason' ? raw : raw === '' ? null : Number(raw) }) : entry));
+    setDirty(true);
+    setSaveState({ kind: 'unsaved', at: null });
+  }, []);
+  const persistDraft = useCallback(async (payload, { quiet = false, background = false } = {}) => {
+    const payloadSignature = JSON.stringify(payload);
+    if (!background) setBusy(true);
+    setSaveState({ kind: 'saving', at: null });
+    try {
+      const saved = await savePayrollDraft(batchId, payload);
+      setBatch(saved);
+      setError('');
+      if (JSON.stringify(entriesRef.current) === payloadSignature) {
+        const normalized = saved.entries.map(calculateEntry);
+        setEntries(normalized);
+        entriesRef.current = normalized;
+        setDirty(false);
+        setSaveState({ kind: 'saved', at: saved.updatedAt || Date.now() });
+      } else {
+        setSaveState({ kind: 'unsaved', at: null });
+      }
+      if (!quiet) toast.success('All current salary entries were saved safely.', { title: 'Payroll draft saved' });
+      return saved;
+    } catch (err) {
+      setSaveState({ kind: 'error', at: null });
+      if (!background) toast.error(err.message, { title: 'Payroll draft was not saved' });
+      return null;
+    } finally {
+      if (!background) setBusy(false);
+    }
+  }, [batchId]);
+  const autoSaveBlocked = useMemo(() => entryRows.some(({ entry, changed }) => !entryCanBeSaved(entry, changed)), [entryRows]);
+  useEffect(() => {
+    if (!editable || !dirty || !entries.length) return undefined;
+    if (autoSaveBlocked) {
+      setSaveState({ kind: 'blocked', at: null });
+      return undefined;
+    }
+    const timer = window.setTimeout(() => persistDraft(entriesRef.current, { quiet: true, background: true }), 2500);
+    return () => window.clearTimeout(timer);
+  }, [entries, editable, dirty, autoSaveBlocked, persistDraft]);
+  const save = (quiet = false) => persistDraft(entriesRef.current, { quiet, background: false });
+  const activeFilteredIndex = filtered.findIndex(({ entry }) => entry.staffRecordId === expandedStaffId);
+  const moveStaff = (direction) => {
+    const targetIndex = activeFilteredIndex < 0 ? 0 : activeFilteredIndex + direction;
+    if (targetIndex < 0 || targetIndex >= filtered.length) return;
+    const target = filtered[targetIndex].entry.staffRecordId;
+    setPage(Math.floor(targetIndex / payrollPageSize) + 1);
+    setExpandedStaffId(target);
+    window.requestAnimationFrame(() => document.getElementById(`payroll-staff-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  };
   const submit = async () => { if (invalid.length) { toast.warning(`Resolve validation issues for ${invalid.length} staff member${invalid.length === 1 ? '' : 's'} before submission.`, { title: 'Payroll needs attention' }); return; } const saved = await save(true); if (!saved) return; setBusy(true); try { const submitted = await submitPayrollBatch(batchId); setBatch(submitted); toast.success('The payroll is locked and waiting for an authorized approver.', { title: 'Payroll submitted' }); } catch (err) { toast.error(err.message, { title: 'Payroll was not submitted' }); } finally { setBusy(false); } };
   const cancel = async () => { if (!cancelReason?.trim()) return; setBusy(true); try { await cancelPayrollBatch(batchId, cancelReason); setCancelReason(null); toast.warning('The payroll batch was cancelled and retained in the audit history.', { title: 'Payroll cancelled' }); navigate('/payroll/batches'); } catch (err) { toast.error(err.message, { title: 'Payroll was not cancelled' }); } finally { setBusy(false); } };
   if (!batchId) return <div className="space-y-6"><PageHeader title="Payroll Entry" description="Open a draft payroll batch to enter salary details." /><Card className="text-center"><p className="text-sm text-muted-foreground">No payroll batch was selected.</p><Link to="/payroll/batches"><PrimaryButton className="mt-4">Go to payroll batches</PrimaryButton></Link></Card></div>;
   if (!batch) return <div className="space-y-6"><PageHeader title="Payroll Entry" description="Loading payroll batch…" />{error && <ErrorBanner text={error} />}</div>;
-  return <div className="space-y-6"><PageHeader title={batch.name} description={editable ? `Enter salary figures directly.${batch.sourceBatchName ? ` Copied from ${batch.sourceBatchName}; only explain staff whose values changed.` : ''}` : 'This payroll is read-only because it is in review or has been finalized.'} actions={<><StatusBadge status={batchStatus(batch.status)} /><Link to="/payroll/batches"><SecondaryButton>Back to batches</SecondaryButton></Link></>} />
+  return <div className="space-y-6"><PageHeader title={batch.name} description={editable ? `Enter salary figures directly.${batch.sourceBatchName ? ` Copied from ${batch.sourceBatchName}; only explain staff whose values changed.` : ''}` : 'This payroll is read-only because it is in review or has been finalized.'} actions={<><SaveStateIndicator state={saveState} /><StatusBadge status={batchStatus(batch.status)} /><Link to="/payroll/batches"><SecondaryButton>Back to batches</SecondaryButton></Link></>} />
     {batch.rejectionReason && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-800"><b>{batch.decisionType === 'request_correction' ? 'Correction requested' : 'Rejected'} by {batch.rejectedBy}:</b> {batch.rejectionReason}</div>}
     {error && <ErrorBanner text={error} />}
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-5"><Metric label="Total Income" value={money(totals.income)} /><Metric label="Total Deductions" value={money(totals.deductions)} /><Metric label="Net Salary" value={money(totals.net)} accent /><Metric label="Employer SSF" value={money(totals.employerSsf)} /><Metric label="Employer PF" value={money(totals.employerPf)} /></div>
-    <Card><div className="mb-4 grid gap-3 lg:grid-cols-[1fr,220px,220px,auto]"><SearchBox value={query} onChange={setQuery} placeholder="Search staff name, ID or email" /><select className={inputClass} value={department} onChange={(e) => setDepartment(e.target.value)}><option value="all">All departments</option>{departments.map((item) => <option key={item}>{item}</option>)}</select><select className={inputClass} value={branch} onChange={(e) => setBranch(e.target.value)}><option value="all">All branches</option>{branches.map((item) => <option key={item}>{item}</option>)}</select><p className="self-center text-sm text-muted-foreground">{visible.length} staff</p></div>
-      <div className="mb-3 flex flex-wrap gap-4 text-xs"><span className="font-bold text-emerald-700">Income fields</span><span className="font-bold text-red-700">Deduction fields</span><span className="font-bold text-blue-700">Automatic totals</span></div>
-      <div className="space-y-4">{visible.map((entry) => <MobilePayrollCard key={entry.staffRecordId} entry={entry} editable={editable} update={update} changed={entryHasChanges(entry, baselineByStaff[entry.staffRecordId])} issues={issuesFor(entry)} />)}</div>
+    <Card>
+      <div className="mb-5 rounded-xl border border-primary/15 bg-primary/[.035] p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-bold">Payroll completion</p><p className="text-xs text-muted-foreground">{completed} of {entryRows.length} staff completed</p></div><p className="text-2xl font-bold text-primary">{entryRows.length ? Math.round((completed / entryRows.length) * 100) : 0}%</p></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${entryRows.length ? (completed / entryRows.length) * 100 : 0}%` }} /></div></div>
+      <div className="mb-4 grid gap-3 lg:grid-cols-[1fr,220px,220px,auto]"><SearchBox value={query} onChange={setQuery} placeholder="Search staff name, ID or email" /><select className={inputClass} value={department} onChange={(e) => setDepartment(e.target.value)}><option value="all">All departments</option>{departments.map((item) => <option key={item}>{item}</option>)}</select><select className={inputClass} value={branch} onChange={(e) => setBranch(e.target.value)}><option value="all">All branches</option>{branches.map((item) => <option key={item}>{item}</option>)}</select><p className="self-center text-sm text-muted-foreground">{filtered.length} staff</p></div>
+      <div className="mb-5 flex flex-wrap gap-2" role="group" aria-label="Filter staff by payroll status">{[['all', 'All', entryRows.length], ['attention', 'Needs Attention', invalid.length], ['changed', 'Salary Changed', entryRows.filter((item) => item.changed).length], ['ready', 'Ready', completed]].map(([value, label, count]) => <button key={value} type="button" onClick={() => setStatusFilter(value)} className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${statusFilter === value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:border-primary/40'}`}>{label} <span className={`ml-1 rounded-full px-1.5 py-0.5 ${statusFilter === value ? 'bg-white/20' : 'bg-muted'}`}>{count}</span></button>)}</div>
+      <div className="mb-3 flex flex-wrap gap-4 text-xs"><span className="font-bold text-emerald-700 dark:text-emerald-400">Income fields</span><span className="font-bold text-red-700 dark:text-red-400">Deduction fields</span><span className="inline-flex items-center gap-1 font-bold text-blue-700 dark:text-blue-400"><Lock className="h-3 w-3" /> Automatic calculations</span></div>
+      <div className="space-y-3">{pagedEntries.map(({ entry, changed, issues, fieldIssues }) => <PayrollStaffCard key={entry.staffRecordId} entry={entry} editable={editable} update={update} changed={changed} issues={issues} fieldIssues={fieldIssues} expanded={expandedStaffId === entry.staffRecordId} onToggle={() => setExpandedStaffId((current) => current === entry.staffRecordId ? null : entry.staffRecordId)} />)}{!pagedEntries.length && <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">No staff match the selected search and filters.</div>}</div>
+      {filtered.length > payrollPageSize && <div className="mt-5 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between"><p className="text-xs text-muted-foreground">Showing {pageStart + 1}-{Math.min(pageStart + payrollPageSize, filtered.length)} of {filtered.length} staff</p><div className="flex items-center gap-2"><SecondaryButton disabled={safePage <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}><ChevronLeft className="h-4 w-4" /> Previous page</SecondaryButton><span className="min-w-20 text-center text-xs font-semibold">Page {safePage} of {pageCount}</span><SecondaryButton disabled={safePage >= pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}>Next page <ChevronRight className="h-4 w-4" /></SecondaryButton></div></div>}
     </Card>
-    {editable && <div className="sticky bottom-4 z-20 flex flex-col gap-3 rounded-xl border border-border bg-card/95 p-4 shadow-xl backdrop-blur sm:flex-row sm:items-center"><div className="flex-1">{invalid.length ? <p className="flex items-center gap-2 text-sm font-semibold text-red-600"><AlertCircle className="h-4 w-4" />{invalid.length} staff record{invalid.length === 1 ? '' : 's'} require attention</p> : <p className="flex items-center gap-2 text-sm font-semibold text-emerald-600"><CheckCircle2 className="h-4 w-4" />All payroll entries are ready for submission</p>}</div><SecondaryButton disabled={busy} onClick={() => save(false)}><Save className="h-4 w-4" /> Save Draft</SecondaryButton><PrimaryButton disabled={busy || invalid.length > 0} onClick={submit}><Send className="h-4 w-4" /> Submit for Approval</PrimaryButton><button disabled={busy} onClick={() => setCancelReason('')} className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-500/30 px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-500/10"><XCircle className="h-4 w-4" /> Cancel Batch</button></div>}
+    {editable && <div className="sticky bottom-3 z-20 rounded-xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur"><div className="flex flex-col gap-3 xl:flex-row xl:items-center"><div className="min-w-0 flex-1"><SaveStateIndicator state={saveState} />{invalid.length ? <p className="mt-1 flex items-center gap-2 text-xs font-semibold text-red-600"><AlertCircle className="h-4 w-4 shrink-0" />{invalid.length} staff record{invalid.length === 1 ? '' : 's'} require attention</p> : <p className="mt-1 flex items-center gap-2 text-xs font-semibold text-emerald-600"><CheckCircle2 className="h-4 w-4" />All payroll entries are ready for submission</p>}</div><div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end"><SecondaryButton disabled={activeFilteredIndex <= 0} onClick={() => moveStaff(-1)}><ChevronLeft className="h-4 w-4" /> Previous Staff</SecondaryButton><SecondaryButton disabled={busy || !dirty || autoSaveBlocked || saveState.kind === 'saving'} onClick={() => save(false)}><Save className="h-4 w-4" /> Save Draft</SecondaryButton><SecondaryButton disabled={activeFilteredIndex < 0 || activeFilteredIndex >= filtered.length - 1} onClick={() => moveStaff(1)}>Next Staff <ChevronRight className="h-4 w-4" /></SecondaryButton><PrimaryButton disabled={busy || invalid.length > 0 || saveState.kind === 'saving'} onClick={submit}><Send className="h-4 w-4" /> Submit</PrimaryButton><button disabled={busy} onClick={() => setCancelReason('')} className="col-span-2 inline-flex items-center justify-center gap-2 rounded-lg border border-red-500/30 px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-500/10 sm:col-auto"><XCircle className="h-4 w-4" /> Cancel Batch</button></div></div></div>}
     <ConfirmActionDialog open={cancelReason !== null} title="Cancel this payroll batch?" description="The batch will be locked as cancelled and retained permanently in the audit history. It will not be deleted." confirmLabel="Cancel payroll batch" tone="danger" inputLabel="Reason for cancellation" inputType="textarea" inputPlaceholder="Enter the required audit reason" required value={cancelReason || ''} onValueChange={setCancelReason} busy={busy} onClose={() => setCancelReason(null)} onConfirm={cancel} />
   </div>;
 }
 
-function MobilePayrollCard({ entry, editable, update, changed, issues }) {
-  return <article className={`rounded-xl border ${issues.length ? 'border-red-500/40' : 'border-border'} bg-background`}><header className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="truncate font-semibold">{entry.fullName}</p><p className="truncate text-xs text-muted-foreground">{entry.staffId} · {entry.email || 'No email'}</p></div><StatusBadge status={issues.length ? `${issues.length} Issues` : changed ? 'Changed' : 'Ready'} /></header><div className="p-4"><MobileFieldGroup title="Income" tone="emerald" fields={incomeFields} entry={entry} editable={editable} update={update} /><MobileFieldGroup title="Deductions" tone="red" fields={deductionFields} entry={entry} editable={editable} update={update} /><div className="mt-4 grid grid-cols-2 gap-3 rounded-lg sm:grid-cols-4 bg-blue-500/[.06] p-3 text-xs"><MobileTotal label="Total income" value={entry.totalIncome} /><MobileTotal label="Deductions" value={entry.totalDeductions} /><MobileTotal label="Net salary" value={entry.netSalary} strong /><MobileTotal label="Employer SSF" value={entry.employerSsf} /></div>{changed && <label className="mt-4 block text-xs font-semibold">Reason for change<input className={`mt-1 h-10 w-full rounded-lg border bg-background px-3 ${!entry.changeReason?.trim() ? 'border-red-500' : 'border-border'}`} value={entry.changeReason || ''} disabled={!editable} onChange={(e) => update(entry.staffRecordId, 'changeReason', e.target.value)} /></label>}{issues.length > 0 && <p className="mt-3 text-xs font-semibold text-red-600">{issues.join(' · ')}</p>}</div></article>;
+function PayrollStaffCard({ entry, editable, update, changed, issues, fieldIssues, expanded, onToggle }) {
+  const status = issues.length ? 'Needs Attention' : changed ? 'Changed' : 'Ready';
+  return <article id={`payroll-staff-${entry.staffRecordId}`} className={`scroll-mt-24 overflow-clip rounded-xl border bg-background ${issues.length ? 'border-red-500/40' : expanded ? 'border-primary/35' : 'border-border'}`}>
+    <header className={expanded ? 'sticky top-[4.5rem] z-10 border-b border-border bg-background/95 backdrop-blur' : ''}><button type="button" aria-expanded={expanded} onClick={onToggle} className="flex w-full flex-col gap-3 p-4 text-left sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="truncate font-semibold">{entry.fullName}</p><p className="truncate text-xs text-muted-foreground">{entry.staffId} · {entry.email || 'No email'}</p></div><div className="flex items-center justify-between gap-3 sm:justify-end"><div className="text-right"><p className="text-[10px] font-bold uppercase text-muted-foreground">Net salary</p><p className="font-bold text-primary">{money(entry.netSalary)}</p></div><StatusBadge status={status} /><ChevronDown className={`h-5 w-5 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} /></div></button></header>
+    {expanded && <div className="p-4"><PayrollFieldGroup title="Income" tone="emerald" fields={incomeFields} entry={entry} editable={editable} update={update} fieldIssues={fieldIssues} /><PayrollFieldGroup title="Deductions" tone="red" fields={deductionFields} entry={entry} editable={editable} update={update} fieldIssues={fieldIssues} /><div className="mt-5 rounded-xl border border-blue-500/20 bg-blue-500/[.06] p-4"><div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase text-blue-700 dark:text-blue-400"><Lock className="h-4 w-4" /> Automatic totals</div><div className="grid grid-cols-2 gap-3 lg:grid-cols-5"><LockedAmount label="Total income" value={entry.totalIncome} /><LockedAmount label="Total deductions" value={entry.totalDeductions} /><LockedAmount label="Net salary" value={entry.netSalary} strong /><LockedAmount label="Employer SSF" value={entry.employerSsf} /><LockedAmount label="Employer PF" value={entry.employerPf} /></div></div>{changed && <label className="mt-4 block text-xs font-semibold">Reason for salary change<input className={`mt-1 h-10 w-full rounded-lg border bg-background px-3 ${!entry.changeReason?.trim() ? 'border-red-500' : 'border-border'}`} value={entry.changeReason || ''} disabled={!editable} placeholder="Explain the salary, allowance, tax, or deduction change" onChange={(event) => update(entry.staffRecordId, 'changeReason', event.target.value)} />{!entry.changeReason?.trim() && <span className="mt-1 block text-[11px] font-semibold text-red-600">A reason is required before this record can be saved.</span>}</label>}<div className={`mt-4 rounded-lg border p-3 text-xs ${issues.length ? 'border-red-500/25 bg-red-500/[.05]' : 'border-emerald-500/25 bg-emerald-500/[.05]'}`}><p className={`flex items-center gap-2 font-bold ${issues.length ? 'text-red-600' : 'text-emerald-600'}`}>{issues.length ? <AlertCircle className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}Validation</p><p className="mt-1 text-muted-foreground">{issues.length ? issues.join(' · ') : 'All required salary and email checks passed.'}</p></div></div>}
+  </article>;
 }
-function MobileFieldGroup({ title, tone, fields, entry, editable, update }) { return <div className="mb-4"><p className={`mb-2 text-xs font-bold uppercase ${tone === 'red' ? 'text-red-700' : 'text-emerald-700'}`}>{title}</p><div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">{fields.map(([field, label, automatic]) => <label key={field} className="text-[11px] text-muted-foreground">{label}<input className="mt-1 h-10 w-full rounded-lg border border-border bg-background px-2 text-right text-sm disabled:bg-muted/50" type="number" min="0" step="0.01" disabled={!editable || Boolean(automatic)} value={entry[field] ?? ''} onChange={(e) => update(entry.staffRecordId, field, e.target.value)} /></label>)}</div></div>; }
-function MobileTotal({ label, value, strong }) { return <div><p className="text-muted-foreground">{label}</p><p className={strong ? 'font-bold text-primary' : 'font-semibold'}>{money(value)}</p></div>; }
 
-function AmountCell({ entry, field, editable, update, deduction = false }) {
-  const invalid = entry[field] === null || entry[field] === undefined || Number(entry[field]) < 0 || Number(entry[field]) > (field === 'basicSalary' ? 1000000 : 250000);
-  return <td className={`border-b border-border p-1 ${deduction ? 'bg-red-500/[.025]' : 'bg-emerald-500/[.025]'}`}><input aria-label={`${entry.fullName} ${field}`} disabled={!editable} className={`h-9 w-full rounded-md border bg-background px-2 text-right text-xs outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-muted/40 ${invalid ? 'border-red-500' : 'border-border'}`} type="number" min="0" step="0.01" value={entry[field] ?? ''} onChange={(e) => update(entry.staffRecordId, field, e.target.value)} /></td>;
+function PayrollFieldGroup({ title, tone, fields, entry, editable, update, fieldIssues }) {
+  return <section className="mb-5"><p className={`mb-3 text-xs font-bold uppercase ${tone === 'red' ? 'text-red-700 dark:text-red-400' : 'text-emerald-700 dark:text-emerald-400'}`}>{title}</p><div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">{fields.map(([field, label, automatic]) => automatic ? <LockedAmount key={field} label={label} value={entry[field]} compact /> : <CurrencyAmountInput key={field} entry={entry} field={field} label={label} editable={editable} update={update} issue={fieldIssues[field]} />)}</div></section>;
 }
-function ComputedCell({ value, strong, deduction, employer }) { return <td className={`border-b border-border p-2 text-right ${strong ? 'font-bold text-primary' : ''} ${deduction ? 'bg-red-500/[.04]' : employer ? 'bg-amber-500/[.04]' : 'bg-blue-500/[.04]'}`}>{money(value)}</td>; }
+
+function CurrencyAmountInput({ entry, field, label, editable, update, issue }) {
+  const value = entry[field];
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState(value === null || value === undefined ? '' : String(value));
+  useEffect(() => { if (!focused) setDraft(value === null || value === undefined ? '' : String(value)); }, [value, focused]);
+  const change = (event) => { const raw = event.target.value.replace(/[^0-9.-]/g, ''); if (!/^-?[0-9]*(\.[0-9]{0,2})?$/.test(raw)) return; setDraft(raw); if (raw === '' || raw === '-' || raw === '.') { if (raw === '') update(entry.staffRecordId, field, ''); return; } update(entry.staffRecordId, field, raw); };
+  const describedBy = issue ? `${entry.staffRecordId}-${field}-error` : undefined;
+  return <label className="block text-[11px] font-semibold text-muted-foreground">{label}<input aria-invalid={Boolean(issue)} aria-describedby={describedBy} disabled={!editable} className={`mt-1 h-11 w-full rounded-lg border bg-background px-3 text-right text-sm font-semibold outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-muted/40 ${issue ? 'border-red-500' : 'border-border'}`} inputMode="decimal" value={focused ? draft : value === null || value === undefined ? '' : money(value)} placeholder="GHS 0.00" onFocus={() => { setFocused(true); setDraft(value === null || value === undefined ? '' : String(value)); }} onBlur={() => setFocused(false)} onChange={change} />{issue && <span id={describedBy} className="mt-1 block text-[11px] font-semibold text-red-600">{issue}</span>}</label>;
+}
+
+function LockedAmount({ label, value, strong = false, compact = false }) { return <div className={`rounded-lg border border-blue-500/15 bg-blue-500/[.055] ${compact ? 'p-3' : 'p-3.5'}`}><div className="flex items-center justify-between gap-2"><p className="text-[11px] font-semibold text-muted-foreground">{label}</p><Lock className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" /></div><p className={`mt-1 text-right ${strong ? 'font-bold text-primary' : 'font-semibold'}`}>{money(value)}</p></div>; }
+
+function SaveStateIndicator({ state }) {
+  const config = { saved: { label: state.at ? `Auto-saved ${new Date(state.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : 'All changes saved', icon: Cloud, tone: 'text-emerald-600' }, saving: { label: 'Auto-saving…', icon: Loader2, tone: 'text-blue-600' }, unsaved: { label: 'Unsaved changes', icon: CloudOff, tone: 'text-amber-600' }, blocked: { label: 'Unsaved — correct highlighted fields', icon: AlertCircle, tone: 'text-red-600' }, error: { label: 'Auto-save failed — use Save Draft', icon: CloudOff, tone: 'text-red-600' } }[state.kind] || { label: 'Save status unavailable', icon: CloudOff, tone: 'text-muted-foreground' };
+  const Icon = config.icon;
+  return <span className={`inline-flex items-center gap-1.5 text-xs font-semibold ${config.tone}`}><Icon className={`h-4 w-4 ${state.kind === 'saving' ? 'animate-spin' : ''}`} />{config.label}</span>;
+}
+
+function payrollFieldIssues(entry) {
+  return Object.fromEntries(manualFields.map((field) => { const value = entry[field]; let issue = ''; if (value === null || value === undefined || value === '') issue = 'Enter an amount, including 0.00 when not applicable.'; else if (!Number.isFinite(Number(value))) issue = 'Enter a valid Ghana cedi amount.'; else if (Number(value) < 0) issue = 'Amount cannot be negative.'; else if (field === 'basicSalary' && Number(value) <= 0) issue = 'Basic salary must be greater than GHS 0.00.'; else if (Number(value) > (field === 'basicSalary' ? 1000000 : 250000)) issue = 'This amount is unusually large and must be checked.'; return [field, issue]; }).filter(([, issue]) => issue));
+}
+
+function entryCanBeSaved(entry, changed) {
+  const amountsAreSafe = manualFields.every((field) => { const value = entry[field]; return value === null || value === undefined || value === '' || (Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 1000000); });
+  return amountsAreSafe && (!changed || Boolean(String(entry.changeReason || '').trim()));
+}
+
 function Metric({ label, value, accent }) { return <Card className="p-4"><p className="text-xs uppercase text-muted-foreground">{label}</p><p className={`mt-1 text-lg font-bold ${accent ? 'text-primary' : ''}`}>{value}</p></Card>; }
 function Summary({ label, value, accent }) { return <div><p className="text-xs text-muted-foreground">{label}</p><p className={`font-bold ${accent ? 'text-primary' : ''}`}>{value}</p></div>; }
 function ErrorBanner({ text }) { return <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700"><AlertCircle className="h-4 w-4" />{text}</div>; }
