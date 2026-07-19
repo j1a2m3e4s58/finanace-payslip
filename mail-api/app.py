@@ -2259,6 +2259,19 @@ def reporting_dashboard_data() -> dict:
     failed = sum(1 for item in deliveries if item.get("status") in {"Failed", "Bounced"})
     pending = sum(1 for item in deliveries if item.get("status") in {"Pending", "Sending", "Retried"})
     corrected = sum(len(item.get("entries", [])) for item in batches if item.get("revisionOf") or int(item.get("version", 1) or 1) > 1 or any(event.get("action") == "corrected" for event in item.get("approvalHistory", [])))
+    active_staff = [item for item in staff if item.get("employmentStatus") == "active"]
+    missing_email_count = sum(1 for item in active_staff if not str(item.get("email") or "").strip())
+    invalid_email_count = sum(1 for item in active_staff if str(item.get("email") or "").strip() and not str(item.get("email") or "").strip().lower().endswith(OFFICIAL_EMAIL_DOMAIN))
+    rejected_batches = [item for item in batches if item.get("status") == "rejected"]
+    warnings = []
+    if rejected_batches:
+        rejected_count = len(rejected_batches)
+        warnings.append({"id": "rejected-payroll", "severity": "critical", "title": f"{rejected_count} rejected payroll batch{'es' if rejected_count != 1 else ''} {'needs' if rejected_count == 1 else 'need'} correction", "message": "Finance must address the approver comments before payslips can be generated or sent.", "count": rejected_count, "href": "/payroll/batches"})
+    if missing_email_count or invalid_email_count:
+        affected = missing_email_count + invalid_email_count
+        warnings.append({"id": "staff-email", "severity": "warning", "title": f"{affected} active staff email record{'s' if affected != 1 else ''} {'needs' if affected == 1 else 'need'} attention", "message": f"Missing: {missing_email_count}. Invalid official addresses: {invalid_email_count}.", "count": affected, "href": "/staff"})
+    if failed:
+        warnings.append({"id": "failed-email", "severity": "warning", "title": f"{failed} payslip email{'s' if failed != 1 else ''} failed or bounced", "message": "Review the delivery report and resend only after correcting the recipient details.", "count": failed, "href": "/payslips/send"})
     monthly = []
     for batch in sorted(batches, key=lambda item: str(item.get("period", ""))):
         monthly.append({"period": batch.get("period"), "income": batch.get("summary", {}).get("totalIncome", 0), "deductions": batch.get("summary", {}).get("totalDeductions", 0), "net": batch.get("summary", {}).get("totalNetSalary", 0)})
@@ -2274,6 +2287,8 @@ def reporting_dashboard_data() -> dict:
         "metrics": {"activeStaff": sum(1 for item in staff if item.get("employmentStatus") == "active"), "inactiveStaff": sum(1 for item in staff if item.get("employmentStatus") == "inactive"), "currentBatch": (current or {}).get("name", "No payroll batch"), "currentBatchStatus": (current or {}).get("status", "none"), "totalIncome": summary.get("totalIncome", 0), "totalDeductions": summary.get("totalDeductions", 0), "totalNetSalary": summary.get("totalNetSalary", 0), "successfulEmails": successful, "failedEmails": failed, "pendingEmails": pending, "correctedPayslips": corrected},
         "charts": {"monthlyPayroll": monthly, "departmentCost": [{"department": key, "cost": value} for key, value in sorted(department_cost.items(), key=lambda item: item[1], reverse=True)], "emailDelivery": [{"status": "Successful", "count": successful}, {"status": "Failed", "count": failed}, {"status": "Pending", "count": pending}], "salaryChanges": [{"period": key, "count": value} for key, value in sorted(changes_by_period.items())]},
         "recentBatches": batches[:5],
+        "warnings": warnings,
+        "refreshedAt": now_ms(),
     }
 
 
