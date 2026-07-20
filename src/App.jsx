@@ -24,9 +24,9 @@ import { AddNewStaff } from '@/pages/StaffPages';
 import StaffDirectory from '@/pages/StaffDirectoryPage';
 import UploadStaffEmails from '@/pages/StaffUploadPage';
 import AuditLogs from '@/pages/AuditLogsPage';
-import { SendPayslips } from '@/pages/PayslipEmailPages';
+import SendPayslips from '@/pages/SendPayslipsPage';
 import SalaryHistory from '@/pages/SalaryHistoryPage';
-import PayslipPdfPage from '@/pages/PayslipPdfPage';
+import PayslipPdfPage from '@/pages/PayslipPreviewPage';
 import UserManagement from '@/pages/UserManagement';
 import { OfflineBanner, SystemStateBoundary } from '@/components/SystemStateBoundary';
 
