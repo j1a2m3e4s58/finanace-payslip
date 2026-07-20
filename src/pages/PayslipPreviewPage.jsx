@@ -5,7 +5,7 @@ import { getBatchPayslipsZip, getPayrollBatches, getStaffPayslipPdf } from '@/ap
 import { EmptyHint, PageHeader, PrimaryButton, SecondaryButton, StatusBadge } from '@/components/payroll/PageElements';
 import { toast } from '@/components/ui/use-toast';
 
-const Card = ({ children, className = '' }) => <section className={`rounded-xl border border-border bg-card p-5 ${className}`}>{children}</section>;
+const Card = ({ children, className = '' }) => <section className={`rounded-xl border border-border bg-card p-4 sm:p-5 ${className}`}>{children}</section>;
 const inputClass = 'h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/25';
 
 export default function PayslipPreviewPage() {

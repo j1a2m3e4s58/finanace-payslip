@@ -17,6 +17,7 @@ import pyotp
 from queue import Empty, Queue
 from io import BytesIO
 from email.message import EmailMessage
+from email.utils import make_msgid
 from datetime import datetime
 from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
 
@@ -32,6 +33,7 @@ from storage import DatabaseStore
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
+load_dotenv(os.path.join(BASE_DIR, ".env.local"), override=True)
 DATA_DIR = os.getenv("PORTAL_DATA_DIR", os.path.join(BASE_DIR, "data")).strip() or os.path.join(BASE_DIR, "data")
 FRONTEND_PUBLIC_DIR = os.getenv("PORTAL_FRONTEND_DIR", os.path.join(BASE_DIR, "public")).strip() or os.path.join(BASE_DIR, "public")
 
@@ -51,13 +53,14 @@ PAYROLL_BATCHES_STORE_PATH = os.path.join(DATA_DIR, "payroll_batches_store.json"
 SALARY_HISTORY_STORE_PATH = os.path.join(DATA_DIR, "salary_history_store.json")
 EMAIL_DELIVERY_STORE_PATH = os.path.join(DATA_DIR, "email_delivery_store.json")
 PORTAL_SETTINGS_STORE_PATH = os.path.join(DATA_DIR, "portal_settings_store.json")
+WORKER_STATUS_STORE_PATH = os.path.join(DATA_DIR, "worker_status_store.json")
 UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
 PRESENCE_TTL_SECONDS = 20
 ONLINE_WINDOW_SECONDS = 20
 RESET_TOKEN_TTL_SECONDS = 30 * 60
 VERIFICATION_TTL_SECONDS = 15 * 60
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
-ALLOWED_ROLES = {"SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover", "Auditor", "Management"}
+ALLOWED_ROLES = {"BossAdmin", "SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover", "Auditor", "Management"}
 ACCOUNT_STATUSES = {"active", "suspended", "disabled"}
 PORTAL_CONTROL_PASSWORD = str(os.getenv("PORTAL_SETTINGS_SECRET", "")).strip()
 DEFAULT_PORTAL_BRANCHES = [
@@ -123,6 +126,20 @@ DEFAULT_PORTAL_SETTINGS = {
     "defaultEmailSubject": "Your Payslip for {month} {year}",
     "defaultEmailBody": "Dear {staff_name},\n\nPlease find attached your confidential payslip for {month} {year}.\n\nRegards,\nFinance Department",
     "payrollApprovalRequired": True,
+    "contributionRates": {
+        "employeeSsf": 5.5,
+        "employeeEsp": 4.5,
+        "employeePf": 4.5,
+        "employerSsf": 13.0,
+        "employerPf": 5.0,
+    },
+    "contributionRateEffectiveMonth": "2000-01",
+    "contributionRateHistory": [],
+    "payrollValidationRules": {
+        "maxBasicSalary": 1_000_000,
+        "maxOtherAmount": 250_000,
+        "deductionWarningPercent": 75,
+    },
     "allowLightMode": True, "allowDarkMode": True, "defaultTheme": "light",
     "inactiveStaffInHistoricalReports": True,
     "requireTestEmail": True,
@@ -156,6 +173,10 @@ def env_secret(name: str) -> str:
 
 def self_registration_enabled() -> bool:
     return str(os.getenv("ALLOW_SELF_REGISTRATION", "true")).strip().lower() in {"1", "true", "yes"}
+
+
+def boss_database_maintenance_enabled() -> bool:
+    return str(os.getenv("ALLOW_BOSS_ADMIN_DATABASE_MAINTENANCE", "false")).strip().lower() in {"1", "true", "yes"}
 
 
 def token_storage_key(token: str) -> str:
@@ -202,6 +223,7 @@ STORE_DEFAULTS: dict[str, object] = {
     SALARY_HISTORY_STORE_PATH: [],
     EMAIL_DELIVERY_STORE_PATH: [],
     PORTAL_SETTINGS_STORE_PATH: {},
+    WORKER_STATUS_STORE_PATH: {},
     LOGIN_ATTEMPTS_STORE_PATH: {},
     RATE_LIMIT_STORE_PATH: {},
     MFA_STORE_PATH: {},
@@ -309,8 +331,8 @@ def enforce_transport_and_api_authentication():
                 return jsonify({"error": "Security token missing or invalid. Refresh the page and try again."}), 403
         session_user = find_user_by_id(load_user_store(), session.get("userId"))
         mfa_exempt = {"auth_mfa_status", "auth_mfa_enroll", "auth_mfa_confirm", "auth_mfa_disable", "auth_logout", "auth_change_password", "get_user"}
-        privileged = session_user and session_user.get("role") in {"SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover"}
-        if privileged and load_portal_settings_store().get("requirePrivilegedMfa", True) and not user_mfa_enabled(session_user["id"]) and request.endpoint not in mfa_exempt:
+        privileged = session_user and session_user.get("role") in {"BossAdmin", "SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover"}
+        if privileged and load_portal_settings_store().get("requirePrivilegedMfa", True) and mfa_configuration_available() and not user_mfa_enabled(session_user["id"]) and request.endpoint not in mfa_exempt:
             return jsonify({"error": "Authenticator setup is required for this role", "mfaEnrollmentRequired": True}), 403
     if not str(os.getenv("DISABLE_BACKUP_SCHEDULER", "false")).lower() in {"1", "true", "yes"} and "start_backup_scheduler" in globals():
         start_backup_scheduler()
@@ -473,10 +495,12 @@ def parse_session_token() -> str:
     return cookie_token
 
 
-def validate_email(email: str) -> str:
+def validate_email(email: str, *, enforce_current_domain: bool = True) -> str:
     normalized = (email or "").strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized):
+        raise ValueError("A valid email address is required")
     settings = load_portal_settings_store()
-    if not normalized.endswith(settings["emailDomain"]):
+    if enforce_current_domain and not normalized.endswith(settings["emailDomain"]):
         raise ValueError("Only official Bawjiase email addresses are allowed")
     return normalized
 
@@ -548,6 +572,8 @@ def is_global_manager(user: dict | None) -> bool:
 
 
 def user_has_permission(user: dict, permission_key: str) -> bool:
+    if str(user.get("role", "")).strip() == "BossAdmin":
+        return permission_key == "portalControl"
     if is_global_manager(user):
         return True
     permissions = user.get("permissions")
@@ -689,7 +715,7 @@ def read_json_file(path: str, default):
 
 
 def normalize_user(raw: dict) -> dict:
-    email = validate_email(str(raw.get("email", "")))
+    email = validate_email(str(raw.get("email", "")), enforce_current_domain=False)
     department = str(raw.get("department", "")).strip().upper()
     branch = str(raw.get("branch", "")).strip().upper()
     role = normalize_role(raw.get("role"), department)
@@ -887,6 +913,13 @@ def mfa_fernet(required: bool = False) -> Fernet | None:
         raise RuntimeError("The configured MFA encryption key is invalid") from exc
 
 
+def mfa_configuration_available() -> bool:
+    try:
+        return mfa_fernet(required=False) is not None
+    except RuntimeError:
+        return False
+
+
 def load_mfa_store() -> dict[str, dict]:
     raw = read_json_file(MFA_STORE_PATH, {})
     return raw if isinstance(raw, dict) else {}
@@ -936,6 +969,46 @@ def verify_user_mfa(user_id: str, code: object) -> bool:
     return False
 
 
+def ensure_boss_admin_account() -> None:
+    """Provision the isolated platform-controller account from server secrets only."""
+    email = str(os.getenv("BOSS_ADMIN_EMAIL", "") or "").strip().lower()
+    password = env_secret("BOSS_ADMIN_INITIAL_PASSWORD")
+    if not email or not password:
+        return
+    try:
+        email = validate_email(email)
+        validate_password_strength(password)
+    except ValueError as exc:
+        app.logger.error("Boss Admin provisioning skipped: %s", exc)
+        return
+    users = load_user_store()
+    user = find_user_by_email(users, email)
+    if user is None:
+        user = normalize_user({
+            "id": f"boss-admin-{now_ms()}",
+            "fullname": str(os.getenv("BOSS_ADMIN_NAME", "Platform Controller") or "Platform Controller").strip(),
+            "phone": "",
+            "email": email,
+            "role": "BossAdmin",
+            "position": "Platform Engineer",
+            "department": "IT",
+            "branch": "HEAD OFFICE",
+            "accountStatus": "active",
+            "isVerified": True,
+            "registrationTime": now_ms(),
+            "mustChangePassword": str(os.getenv("BOSS_ADMIN_REQUIRE_PASSWORD_CHANGE", "true")).strip().lower() in {"1", "true", "yes"},
+        })
+        users.append(user)
+        save_user_store(users)
+    elif user.get("role") != "BossAdmin":
+        app.logger.error("Boss Admin provisioning skipped: the configured email belongs to another account")
+        return
+    passwords = load_password_store()
+    if not passwords.get(email):
+        passwords[email] = hash_password_for_storage(password)
+        save_password_store(passwords)
+
+
 seed_password_store_if_needed()
 
 
@@ -956,7 +1029,7 @@ def load_reset_tokens() -> dict[str, dict]:
         if expires_at <= current:
             continue
         try:
-            email = validate_email(str(item.get("email", "")))
+            email = validate_email(str(item.get("email", "")), enforce_current_domain=False)
         except ValueError:
             continue
         tokens[normalized_token_storage_key(token)] = {
@@ -1103,13 +1176,92 @@ def normalize_positive_number(value, fallback: int) -> int:
     return number if number > 0 else fallback
 
 
+def normalize_percentage(value: object, fallback: float) -> float:
+    try:
+        number = round(float(value), 4)
+    except (TypeError, ValueError):
+        return fallback
+    return number if 0 <= number <= 100 else fallback
+
+
+def normalize_money_limit(value: object, fallback: float) -> float:
+    try:
+        number = round(float(value), 2)
+    except (TypeError, ValueError):
+        return fallback
+    return number if 1 <= number <= 100_000_000 else fallback
+
+
+def normalize_effective_month(value: object, fallback: str = "2000-01") -> str:
+    month = str(value or "").strip()
+    if re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        return month
+    return fallback
+
+
+def normalize_contribution_rates(value: object) -> dict[str, float]:
+    incoming = value if isinstance(value, dict) else {}
+    fallback = DEFAULT_PORTAL_SETTINGS["contributionRates"]
+    return {
+        key: normalize_percentage(incoming.get(key), default)
+        for key, default in fallback.items()
+    }
+
+
+def normalize_payroll_validation_rules(value: object) -> dict[str, float]:
+    incoming = value if isinstance(value, dict) else {}
+    fallback = DEFAULT_PORTAL_SETTINGS["payrollValidationRules"]
+    return {
+        "maxBasicSalary": normalize_money_limit(incoming.get("maxBasicSalary"), fallback["maxBasicSalary"]),
+        "maxOtherAmount": normalize_money_limit(incoming.get("maxOtherAmount"), fallback["maxOtherAmount"]),
+        "deductionWarningPercent": normalize_percentage(incoming.get("deductionWarningPercent"), fallback["deductionWarningPercent"]),
+    }
+
+
+def normalize_contribution_rate_history(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    by_month: dict[str, dict] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        month = normalize_effective_month(item.get("effectiveMonth"), "")
+        if not month:
+            continue
+        by_month[month] = {
+            "effectiveMonth": month,
+            "rates": normalize_contribution_rates(item.get("rates")),
+            "changedAt": int(item.get("changedAt", 0) or 0),
+            "changedBy": str(item.get("changedBy") or "System"),
+        }
+    return sorted(by_month.values(), key=lambda item: item["effectiveMonth"])
+
+
+def contribution_rate_profile_for_period(period: str, settings: dict | None = None) -> dict:
+    current = settings or load_portal_settings_store()
+    target = normalize_effective_month(period, datetime.now().strftime("%Y-%m"))
+    profile = {
+        "effectiveMonth": "2000-01",
+        "rates": normalize_contribution_rates(None),
+    }
+    history = normalize_contribution_rate_history(current.get("contributionRateHistory"))
+    current_item = {
+        "effectiveMonth": normalize_effective_month(current.get("contributionRateEffectiveMonth")),
+        "rates": normalize_contribution_rates(current.get("contributionRates")),
+    }
+    history = [item for item in history if item["effectiveMonth"] != current_item["effectiveMonth"]] + [current_item]
+    for item in sorted(history, key=lambda value: value["effectiveMonth"]):
+        if item["effectiveMonth"] <= target:
+            profile = {"effectiveMonth": item["effectiveMonth"], "rates": item["rates"]}
+    return profile
+
+
 def load_portal_settings_store() -> dict:
     raw = read_json_file(PORTAL_SETTINGS_STORE_PATH, {})
     if not isinstance(raw, dict):
         raw = {}
     def finance_text(name: str) -> str:
-        value = str(raw.get(name) or DEFAULT_PORTAL_SETTINGS[name]).strip()
-        return str(DEFAULT_PORTAL_SETTINGS[name]) if "susu" in value.lower() else value
+        return str(raw.get(name) or DEFAULT_PORTAL_SETTINGS[name]).strip()
     def labels(name: str) -> dict:
         fallback = DEFAULT_PORTAL_SETTINGS[name]
         incoming = raw.get(name) if isinstance(raw.get(name), dict) else {}
@@ -1148,6 +1300,10 @@ def load_portal_settings_store() -> dict:
         "defaultEmailSubject": str(raw.get("defaultEmailSubject") or DEFAULT_PORTAL_SETTINGS["defaultEmailSubject"]),
         "defaultEmailBody": str(raw.get("defaultEmailBody") or DEFAULT_PORTAL_SETTINGS["defaultEmailBody"]),
         "payrollApprovalRequired": bool(raw.get("payrollApprovalRequired", True)),
+        "contributionRates": normalize_contribution_rates(raw.get("contributionRates")),
+        "contributionRateEffectiveMonth": normalize_effective_month(raw.get("contributionRateEffectiveMonth")),
+        "contributionRateHistory": normalize_contribution_rate_history(raw.get("contributionRateHistory")),
+        "payrollValidationRules": normalize_payroll_validation_rules(raw.get("payrollValidationRules")),
         "allowLightMode": bool(raw.get("allowLightMode", True)), "allowDarkMode": bool(raw.get("allowDarkMode", True)),
         "defaultTheme": str(raw.get("defaultTheme") or "light").strip().lower(),
         "inactiveStaffInHistoricalReports": bool(raw.get("inactiveStaffInHistoricalReports", True)),
@@ -1170,6 +1326,9 @@ def load_portal_settings_store() -> dict:
 
 def save_portal_settings_store(settings: dict) -> None:
     atomic_write_json(PORTAL_SETTINGS_STORE_PATH, settings)
+
+
+ensure_boss_admin_account()
 
 
 
@@ -1380,6 +1539,24 @@ def require_authenticated_user():
     return token, user, None
 
 
+def require_portal_controller():
+    token, user, error = require_authenticated_user()
+    if error:
+        return token, user, error
+    if user.get("role") != "BossAdmin":
+        return token, user, (jsonify({"error": "Boss Admin access required"}), 403)
+    return token, user, None
+
+
+def require_notification_viewer():
+    token, user, error = require_authenticated_user()
+    if error:
+        return token, user, error
+    if user.get("role") == "BossAdmin":
+        return token, user, (jsonify({"error": "Bank activity is not available to the platform controller"}), 403)
+    return token, user, None
+
+
 def require_staff_manager():
     token, user, error = require_authenticated_user()
     if error:
@@ -1402,7 +1579,7 @@ def require_payroll_viewer():
     token, user, error = require_authenticated_user()
     if error:
         return token, user, error
-    if user["role"] not in {"SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover", "Management"}:
+    if user["role"] not in {"SuperAdmin", "FinanceOfficer", "FinanceApprover"}:
         return token, user, (jsonify({"error": "Payroll access required"}), 403)
     return token, user, None
 
@@ -1411,7 +1588,7 @@ def require_payroll_preparer():
     token, user, error = require_authenticated_user()
     if error:
         return token, user, error
-    if user["role"] not in {"SuperAdmin", "Admin", "FinanceOfficer"}:
+    if user["role"] not in {"SuperAdmin", "FinanceOfficer"}:
         return token, user, (jsonify({"error": "Finance preparation access required"}), 403)
     return token, user, None
 
@@ -1471,12 +1648,16 @@ def mail_config() -> dict[str, str | int]:
     }
 
 
-def send_mail(to_email: str, subject: str, text_body: str, html_body: str, attachment: tuple[str, bytes, str] | None = None):
+def send_mail(to_email: str, subject: str, text_body: str, html_body: str, attachment: tuple[str, bytes, str] | None = None, delivery_id: str = "") -> str:
     cfg = mail_config()
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = str(cfg["MAIL_DEFAULT_SENDER"])
     msg["To"] = to_email
+    message_id = make_msgid(domain=load_portal_settings_store()["emailDomain"].lstrip("@"))
+    msg["Message-ID"] = message_id
+    if delivery_id:
+        msg["X-BCB-Delivery-ID"] = delivery_id
     msg.set_content(text_body)
     msg.add_alternative(html_body, subtype="html")
     if attachment:
@@ -1490,6 +1671,7 @@ def send_mail(to_email: str, subject: str, text_body: str, html_body: str, attac
             smtp.starttls()
         smtp.login(str(cfg["MAIL_USERNAME"]), str(cfg["MAIL_PASSWORD"]))
         smtp.send_message(msg)
+    return message_id
 
 
 
@@ -1808,6 +1990,8 @@ def upload_public_url(filename: str) -> str:
 def scan_uploaded_file(path: str) -> None:
     scanner = str(os.getenv("MALWARE_SCANNER_COMMAND", "")).strip()
     if not scanner:
+        if str(os.getenv("REQUIRE_MALWARE_SCANNER", "false")).strip().lower() in {"1", "true", "yes"}:
+            raise ValueError("The upload security scanner is required but not configured")
         return
     try:
         result = subprocess.run([scanner, "--no-summary", path], capture_output=True, text=True, timeout=30, check=False)
@@ -1862,7 +2046,8 @@ def health():
     deliveries = load_json_list_store(EMAIL_DELIVERY_STORE_PATH)
     queued = len([item for item in deliveries if item.get("status") in {"Pending", "Sending", "Retried"}])
     ok = bool(database.get("ok"))
-    return jsonify({"ok": ok, "database": database, "deliveryQueue": {"pending": queued, "workerStarted": PAYSLIP_WORKER_STARTED}}), 200 if ok else 503
+    worker = payslip_worker_status()
+    return jsonify({"ok": ok, "database": database, "deliveryQueue": {"pending": queued, "workerStarted": PAYSLIP_WORKER_STARTED, **worker}}), 200 if ok else 503
 
 
 @app.route("/api/metrics", methods=["GET"])
@@ -1880,7 +2065,7 @@ def operational_metrics():
         delivery_counts[status] = delivery_counts.get(status, 0) + 1
     return jsonify({
         "database": DATABASE_STORE.health(),
-        "worker": {"mode": str(os.getenv("PAYSLIP_WORKER_MODE", "embedded")).lower(), "embeddedStarted": PAYSLIP_WORKER_STARTED},
+        "worker": {**payslip_worker_status(), "embeddedStarted": PAYSLIP_WORKER_STARTED},
         "counts": {
             "users": len(load_user_store()),
             "staff": len(load_json_list_store(STAFF_RECORDS_STORE_PATH)),
@@ -1900,7 +2085,8 @@ def get_uploaded_media(filename: str):
     _, auth_user, error = require_authenticated_user()
     if error:
         return error
-    if find_user_by_local_image(safe_name):
+    image_owner = find_user_by_local_image(safe_name)
+    if image_owner and (auth_user.get("role") != "BossAdmin" or image_owner.get("id") == auth_user.get("id")):
         return send_from_directory(UPLOADS_DIR, safe_name, conditional=True)
     settings = load_portal_settings_store()
     if any(str(settings.get(key, "")).endswith(safe_name) for key in {"bankLogo", "authorizedSignature"}):
@@ -1913,11 +2099,9 @@ def upload_branding_asset():
     preflight = handle_options()
     if preflight:
         return preflight
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_portal_controller()
     if error:
         return error
-    if auth_user.get("role") not in {"SuperAdmin", "Admin"}:
-        return jsonify({"error": "Administrator access required"}), 403
     upload = request.files.get("file")
     if upload and request.content_length and request.content_length > 5 * 1024 * 1024:
         return jsonify({"error": "Branding images must be 5 MB or smaller"}), 413
@@ -1962,9 +2146,11 @@ def legacy_mail_api(path: str):
 
 @app.route("/api/presence", methods=["GET"])
 def get_presence():
-    _, _, error = require_authenticated_user()
+    _, auth_user, error = require_authenticated_user()
     if error:
         return error
+    if auth_user.get("role") == "BossAdmin":
+        return jsonify({"error": "Bank presence activity is not available to the platform controller"}), 403
     store = prune_presence(load_presence_store())
     save_presence_store(store)
     return jsonify({"presence": store})
@@ -2019,7 +2205,7 @@ def logout_presence():
 
 @app.route("/api/notifications", methods=["GET"])
 def get_notifications():
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_notification_viewer()
     if error:
         return error
     items = load_json_list_store(NOTIFICATIONS_STORE_PATH)
@@ -2034,7 +2220,7 @@ def get_notifications():
 
 @app.route("/api/notifications/unread-count", methods=["GET"])
 def get_unread_notification_count():
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_notification_viewer()
     if error:
         return error
     items = load_json_list_store(NOTIFICATIONS_STORE_PATH)
@@ -2052,7 +2238,7 @@ def mark_notification_read(item_id: int):
     preflight = handle_options()
     if preflight:
         return preflight
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_notification_viewer()
     if error:
         return error
     items = load_json_list_store(NOTIFICATIONS_STORE_PATH)
@@ -2077,7 +2263,7 @@ def mark_all_notifications_read():
     preflight = handle_options()
     if preflight:
         return preflight
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_notification_viewer()
     if error:
         return error
     items = load_json_list_store(NOTIFICATIONS_STORE_PATH)
@@ -2096,7 +2282,7 @@ def delete_notification(item_id: int):
     preflight = handle_options()
     if preflight:
         return preflight
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_notification_viewer()
     if error:
         return error
     items = load_json_list_store(NOTIFICATIONS_STORE_PATH)
@@ -2281,7 +2467,8 @@ def reporting_dashboard_data() -> dict:
     corrected = sum(len(item.get("entries", [])) for item in batches if item.get("revisionOf") or int(item.get("version", 1) or 1) > 1 or any(event.get("action") == "corrected" for event in item.get("approvalHistory", [])))
     active_staff = [item for item in staff if item.get("employmentStatus") == "active"]
     missing_email_count = sum(1 for item in active_staff if not str(item.get("email") or "").strip())
-    invalid_email_count = sum(1 for item in active_staff if str(item.get("email") or "").strip() and not str(item.get("email") or "").strip().lower().endswith(OFFICIAL_EMAIL_DOMAIN))
+    official_domain = load_portal_settings_store()["emailDomain"]
+    invalid_email_count = sum(1 for item in active_staff if str(item.get("email") or "").strip() and not str(item.get("email") or "").strip().lower().endswith(official_domain))
     rejected_batches = [item for item in batches if item.get("status") == "rejected"]
     warnings = []
     if rejected_batches:
@@ -2363,22 +2550,21 @@ def export_report_data():
 @app.route("/api/portal-settings", methods=["GET"])
 def get_portal_settings():
     settings = load_portal_settings_store()
-    public_settings = {key: value for key, value in settings.items() if key not in {"portalControlPassword", "itAccessCode", "hrAccessCode", "smtpServer", "smtpUsername", "smtpSender"}}
+    public_settings = {key: value for key, value in settings.items() if key not in {"portalControlPassword", "itAccessCode", "hrAccessCode", "smtpServer", "smtpUsername", "smtpSender", "updatedBy", "contributionRateHistory"}}
     public_settings["selfRegistrationEnabled"] = self_registration_enabled()
+    public_settings["mfaEnrollmentAvailable"] = mfa_configuration_available()
     return jsonify({"settings": public_settings})
 
 
 @app.route("/api/system-settings", methods=["GET"])
 def get_system_settings():
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_portal_controller()
     if error:
         return error
-    if auth_user.get("role") not in {"SuperAdmin", "Admin"}:
-        return jsonify({"error": "Administrator access required"}), 403
     settings = load_portal_settings_store()
     safe = {key: value for key, value in settings.items() if key not in {"portalControlPassword", "itAccessCode", "hrAccessCode"}}
     safe["smtpPasswordConfigured"] = bool(env_secret("MAIL_PASSWORD"))
-    safe["canManageBackups"] = auth_user.get("role") == "SuperAdmin"
+    safe["canManageBackups"] = boss_database_maintenance_enabled()
     return jsonify({"settings": safe})
 
 
@@ -2387,11 +2573,9 @@ def test_smtp_configuration():
     preflight = handle_options()
     if preflight:
         return preflight
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_portal_controller()
     if error:
         return error
-    if auth_user.get("role") not in {"SuperAdmin", "Admin"}:
-        return jsonify({"error": "Administrator access required"}), 403
     try:
         cfg = mail_config()
         smtp_class = smtplib.SMTP_SSL if cfg["MAIL_SECURITY"] == "ssl" else smtplib.SMTP
@@ -2411,11 +2595,9 @@ def test_pdf_configuration():
     preflight = handle_options()
     if preflight:
         return preflight
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_portal_controller()
     if error:
         return error
-    if auth_user.get("role") not in {"SuperAdmin", "Admin"}:
-        return jsonify({"error": "Administrator access required"}), 403
     try:
         settings, logo_path = payslip_pdf_settings()
         sample = calculate_payroll_entry({"staffRecordId": "configuration-test", "staffId": "BCB-TEST", "fullName": "Configuration Test", "email": auth_user.get("email"), "department": "FINANCE", "branch": "HEAD OFFICE", **{field: (1000 if field == "basicSalary" else 0) for field in PAYROLL_MANUAL_FIELDS}})
@@ -2432,16 +2614,34 @@ def update_portal_settings():
     preflight = handle_options()
     if preflight:
         return preflight
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_portal_controller()
     if error:
         return error
-    if auth_user["role"] not in {"SuperAdmin", "Admin"}:
-        return jsonify({"error": "Administrator access required"}), 403
     data, error = require_json()
     if error:
         return error
     current_settings = load_portal_settings_store()
     branches = normalize_portal_branches(data.get("branches"))
+    contribution_rates = normalize_contribution_rates(data.get("contributionRates"))
+    contribution_effective_month = normalize_effective_month(data.get("contributionRateEffectiveMonth"))
+    contribution_history = normalize_contribution_rate_history(current_settings.get("contributionRateHistory"))
+    if contribution_rates != current_settings.get("contributionRates") or contribution_effective_month != current_settings.get("contributionRateEffectiveMonth"):
+        previous_effective_month = normalize_effective_month(current_settings.get("contributionRateEffectiveMonth"))
+        if not any(item["effectiveMonth"] == previous_effective_month for item in contribution_history):
+            contribution_history.append({
+                "effectiveMonth": previous_effective_month,
+                "rates": normalize_contribution_rates(current_settings.get("contributionRates")),
+                "changedAt": int(current_settings.get("updatedAt", 0) or 0),
+                "changedBy": str((current_settings.get("updatedBy") or {}).get("fullname") or "System"),
+            })
+        contribution_history = [item for item in contribution_history if item["effectiveMonth"] != contribution_effective_month]
+        contribution_history.append({
+            "effectiveMonth": contribution_effective_month,
+            "rates": contribution_rates,
+            "changedAt": now_ms(),
+            "changedBy": auth_user.get("fullname") or auth_user.get("email"),
+        })
+        contribution_history.sort(key=lambda item: item["effectiveMonth"])
     settings = {
         "bankName": str(data.get("bankName") or DEFAULT_PORTAL_SETTINGS["bankName"]).strip(),
         "shortBankName": str(data.get("shortBankName") or DEFAULT_PORTAL_SETTINGS["shortBankName"]).strip(),
@@ -2479,6 +2679,10 @@ def update_portal_settings():
         "defaultEmailSubject": str(data.get("defaultEmailSubject") or DEFAULT_PORTAL_SETTINGS["defaultEmailSubject"]).strip()[:200],
         "defaultEmailBody": str(data.get("defaultEmailBody") or DEFAULT_PORTAL_SETTINGS["defaultEmailBody"]).strip()[:10000],
         "payrollApprovalRequired": bool(data.get("payrollApprovalRequired", True)),
+        "contributionRates": contribution_rates,
+        "contributionRateEffectiveMonth": contribution_effective_month,
+        "contributionRateHistory": contribution_history,
+        "payrollValidationRules": normalize_payroll_validation_rules(data.get("payrollValidationRules")),
         "allowLightMode": bool(data.get("allowLightMode", True)), "allowDarkMode": bool(data.get("allowDarkMode", True)),
         "defaultTheme": str(data.get("defaultTheme") or "light").strip().lower(),
         "inactiveStaffInHistoricalReports": bool(data.get("inactiveStaffInHistoricalReports", True)),
@@ -2522,15 +2726,9 @@ def update_portal_settings():
             "updatedAt": settings["updatedAt"],
         },
     )
-    notify_active_managers(
-        kind="portal_control",
-        title="Portal settings updated",
-        message=f"{auth_user['fullname']} updated portal branches, departments, labels, or access settings.",
-        link_to="/settings",
-    )
     response_settings = {key: value for key, value in settings.items() if key not in {"portalControlPassword", "itAccessCode", "hrAccessCode"}}
     response_settings["smtpPasswordConfigured"] = bool(env_secret("MAIL_PASSWORD"))
-    response_settings["canManageBackups"] = auth_user.get("role") == "SuperAdmin"
+    response_settings["canManageBackups"] = boss_database_maintenance_enabled()
     return jsonify({"ok": True, "settings": response_settings})
 
 
@@ -2612,11 +2810,11 @@ def start_backup_scheduler() -> None:
 
 @app.route("/api/backup/export", methods=["GET"])
 def export_production_backup():
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_portal_controller()
     if error:
         return error
-    if auth_user.get("role") != "SuperAdmin":
-        return jsonify({"error": "Super Admin access required"}), 403
+    if not boss_database_maintenance_enabled():
+        return jsonify({"error": "Database export is disabled to protect confidential bank records"}), 403
     backup = build_backup_payload({"id": auth_user["id"], "fullname": auth_user["fullname"], "email": auth_user["email"], "role": auth_user["role"]})
     try:
         encrypted = encrypt_backup_payload(backup)
@@ -2636,11 +2834,9 @@ def export_production_backup():
 
 @app.route("/api/security/status", methods=["GET"])
 def get_security_status():
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_portal_controller()
     if error:
         return error
-    if auth_user.get("role") not in {"SuperAdmin", "Admin"}:
-        return jsonify({"error": "Administrator access required"}), 403
     settings = load_portal_settings_store()
     try:
         mail_config()
@@ -2654,16 +2850,20 @@ def get_security_status():
         "lockoutMinutes": ACCOUNT_LOCKOUT_SECONDS // 60,
         "dataEncryptionConfigured": bool(env_secret("DATA_ENCRYPTION_KEY")),
         "backupEncryptionConfigured": bool(env_secret("BACKUP_ENCRYPTION_KEY")),
+        "mfaEncryptionConfigured": mfa_configuration_available(),
         "smtpCredentialsConfigured": smtp_configured,
+        "deliveryWebhookConfigured": bool(env_secret("DELIVERY_WEBHOOK_SECRET")),
         "httpOnlySessionCookies": True,
         "csrfProtection": True,
         "malwareScannerConfigured": bool(str(os.getenv("MALWARE_SCANNER_COMMAND", "")).strip()),
+        "malwareScannerRequired": str(os.getenv("REQUIRE_MALWARE_SCANNER", "false")).strip().lower() in {"1", "true", "yes"},
         "payslipWorkerMode": str(os.getenv("PAYSLIP_WORKER_MODE", "embedded")).strip().lower(),
+        "payslipWorkerHealthy": payslip_worker_status()["healthy"],
         "databaseBackend": DATABASE_STORE.backend,
         "forceHttps": str(os.getenv("FORCE_HTTPS", "false")).strip().lower() in {"1", "true", "yes"},
         "restrictPayslipDownloads": settings.get("restrictPayslipDownloads", True),
         "approvedPayrollOnly": True,
-        "canManageBackups": auth_user.get("role") == "SuperAdmin",
+        "canManageBackups": boss_database_maintenance_enabled(),
     }})
 
 
@@ -2672,11 +2872,11 @@ def restore_production_backup():
     preflight = handle_options()
     if preflight:
         return preflight
-    _, auth_user, error = require_authenticated_user()
+    _, auth_user, error = require_portal_controller()
     if error:
         return error
-    if auth_user.get("role") != "SuperAdmin":
-        return jsonify({"error": "Super Admin access required"}), 403
+    if not boss_database_maintenance_enabled():
+        return jsonify({"error": "Database restore is disabled to protect confidential bank records"}), 403
     data, error = require_json()
     if error:
         return error
@@ -2735,6 +2935,8 @@ def create_user_account():
         branch = normalize_portal_branch_name(data.get("branch"))
         password = str(data.get("password", ""))
         validate_password_strength(password)
+        if str(data.get("role", "")).strip() == "BossAdmin":
+            return jsonify({"error": "Boss Admin accounts can only be provisioned from the secure server environment"}), 403
         role = normalize_role(data.get("role"), department)
         if role == "SuperAdmin" and auth_user["role"] != "SuperAdmin":
             return jsonify({"error": "Only a Super Admin can create another Super Admin"}), 403
@@ -2796,6 +2998,8 @@ def admin_reset_user_password(user_id: str):
     user = find_user_by_id(users, user_id)
     if not user:
         return jsonify({"error": "User not found"}), 404
+    if user.get("role") == "BossAdmin":
+        return jsonify({"error": "The platform controller account is isolated from bank user administration"}), 403
     if user["role"] == "SuperAdmin" and auth_user["role"] != "SuperAdmin":
         return jsonify({"error": "Only a Super Admin can reset another Super Admin password"}), 403
     password = str(data.get("password", ""))
@@ -2825,6 +3029,8 @@ def admin_reset_user_mfa(user_id: str):
     user = find_user_by_id(users, user_id)
     if not user:
         return jsonify({"error": "User not found"}), 404
+    if user.get("role") == "BossAdmin":
+        return jsonify({"error": "The platform controller account is isolated from bank user administration"}), 403
     if user_id == auth_user["id"]:
         return jsonify({"error": "Use your profile security controls to disable your own MFA"}), 400
     if user["role"] == "SuperAdmin" and auth_user["role"] != "SuperAdmin":
@@ -2842,7 +3048,8 @@ def list_users():
     _, _, error = require_staff_manager()
     if error:
         return error
-    return jsonify({"users": serialize_users_with_presence(load_user_store())})
+    bank_users = [user for user in load_user_store() if user.get("role") != "BossAdmin"]
+    return jsonify({"users": serialize_users_with_presence(bank_users)})
 
 
 @app.route("/api/users/<user_id>", methods=["GET"])
@@ -2856,6 +3063,8 @@ def get_user(user_id: str):
     user = find_user_by_id(users, user_id)
     if not user:
         return jsonify({"error": "User not found"}), 404
+    if user.get("role") == "BossAdmin" and auth_user.get("id") != user_id:
+        return jsonify({"error": "Access denied"}), 403
     presence = prune_presence(load_presence_store())
     save_presence_store(presence)
     return jsonify({"user": serialize_user_with_presence(user, presence)})
@@ -2869,6 +3078,8 @@ def get_user_activity(user_id: str):
     user = find_user_by_id(load_user_store(), user_id)
     if not user:
         return jsonify({"error": "User not found"}), 404
+    if user.get("role") == "BossAdmin":
+        return jsonify({"error": "The platform controller account is isolated from bank user administration"}), 403
     identifiers = [str(user_id).lower(), str(user.get("email", "")).lower(), str(user.get("fullname", "")).lower()]
     activity = []
     for item in load_audit_logs_store():
@@ -3000,13 +3211,15 @@ def update_profile(user_id: str):
 
 @app.route("/api/staff/active", methods=["GET"])
 def get_active_staff():
-    _, _, error = require_authenticated_user()
+    _, auth_user, error = require_authenticated_user()
     if error:
         return error
+    if auth_user.get("role") == "BossAdmin":
+        return jsonify({"error": "Bank staff records are not available to the platform controller"}), 403
     users = load_user_store()
     active_users = [
         user for user in users
-        if user["isActive"] and not user["isArchived"] and user["fullname"] not in {"MASTER ADMIN", "System Admin"}
+        if user.get("role") != "BossAdmin" and user["isActive"] and not user["isArchived"] and user["fullname"] not in {"MASTER ADMIN", "System Admin"}
     ]
     return jsonify({"users": serialize_users_with_presence(active_users)})
 
@@ -3033,7 +3246,7 @@ PAYROLL_FIELD_LABELS = {
 }
 
 
-def payroll_number(value: object, field_name: str, allow_empty: bool = True) -> float | None:
+def payroll_number(value: object, field_name: str, allow_empty: bool = True, maximum: float = 1_000_000) -> float | None:
     if value is None or str(value).strip() == "":
         if allow_empty:
             return None
@@ -3044,13 +3257,20 @@ def payroll_number(value: object, field_name: str, allow_empty: bool = True) -> 
         raise ValueError(f"{field_name} must be a valid amount")
     if amount < 0:
         raise ValueError(f"{field_name} cannot be negative")
-    if amount > 1_000_000:
+    if amount > maximum:
         raise ValueError(f"{field_name} contains an unusually large amount")
     return amount
 
 
-def calculate_payroll_entry(data: dict, existing: dict | None = None) -> dict:
+def calculate_payroll_entry(
+    data: dict,
+    existing: dict | None = None,
+    contribution_rates: dict | None = None,
+    validation_rules: dict | None = None,
+) -> dict:
     current = dict(existing or {})
+    rates = normalize_contribution_rates(contribution_rates)
+    rules = normalize_payroll_validation_rules(validation_rules)
     entry = {
         "staffRecordId": str(data.get("staffRecordId", current.get("staffRecordId", ""))),
         "staffId": str(data.get("staffId", current.get("staffId", ""))),
@@ -3060,31 +3280,36 @@ def calculate_payroll_entry(data: dict, existing: dict | None = None) -> dict:
         "branch": str(data.get("branch", current.get("branch", ""))),
     }
     for field in PAYROLL_MANUAL_FIELDS:
-        entry[field] = payroll_number(data.get(field, current.get(field)), field)
+        maximum = rules["maxBasicSalary"] if field == "basicSalary" else rules["maxOtherAmount"]
+        entry[field] = payroll_number(data.get(field, current.get(field)), field, maximum=maximum)
     basic = float(entry.get("basicSalary") or 0)
-    entry["ssf"] = round(basic * 0.055, 2)
-    entry["esp"] = round(basic * 0.045, 2)
-    entry["pf"] = round(basic * 0.045, 2)
-    entry["employerSsf"] = round(basic * 0.13, 2)
-    entry["employerPf"] = round(basic * 0.05, 2)
+    entry["ssf"] = round(basic * rates["employeeSsf"] / 100, 2)
+    entry["esp"] = round(basic * rates["employeeEsp"] / 100, 2)
+    entry["pf"] = round(basic * rates["employeePf"] / 100, 2)
+    entry["employerSsf"] = round(basic * rates["employerSsf"] / 100, 2)
+    entry["employerPf"] = round(basic * rates["employerPf"] / 100, 2)
     entry["totalIncome"] = round(sum(float(entry.get(field) or 0) for field in PAYROLL_INCOME_FIELDS), 2)
     entry["totalDeductions"] = round(entry["ssf"] + entry["esp"] + entry["pf"] + sum(float(entry.get(field) or 0) for field in PAYROLL_MANUAL_DEDUCTION_FIELDS), 2)
     entry["netSalary"] = round(entry["totalIncome"] - entry["totalDeductions"], 2)
     return entry
 
 
-def payroll_entry_issues(entry: dict) -> list[str]:
+def payroll_entry_issues(entry: dict, validation_rules: dict | None = None, email_domain: str | None = None) -> list[str]:
+    rules = normalize_payroll_validation_rules(validation_rules)
+    official_domain = normalize_email_domain(email_domain or load_portal_settings_store().get("emailDomain"))
     issues = []
     missing = [field for field in PAYROLL_MANUAL_FIELDS if entry.get(field) is None]
     if missing:
         issues.append("Empty salary fields")
     if not entry.get("email"):
         issues.append("Missing email address")
-    elif not str(entry.get("email")).endswith(OFFICIAL_EMAIL_DOMAIN):
+    elif not str(entry.get("email")).endswith(official_domain):
         issues.append("Invalid email address")
     if float(entry.get("basicSalary") or 0) <= 0:
         issues.append("Basic salary must be greater than zero")
-    if any(float(entry.get(field) or 0) > 250_000 for field in PAYROLL_MANUAL_FIELDS if field != "basicSalary"):
+    if float(entry.get("basicSalary") or 0) > rules["maxBasicSalary"]:
+        issues.append("Basic salary exceeds the configured warning limit")
+    if any(float(entry.get(field) or 0) > rules["maxOtherAmount"] for field in PAYROLL_MANUAL_FIELDS if field != "basicSalary"):
         issues.append("Unusually large figure")
     if float(entry.get("netSalary") or 0) < 0:
         issues.append("Deductions exceed income")
@@ -3115,6 +3340,8 @@ def approval_event(action: str, user: dict, comments: str = "") -> dict:
 
 
 def payroll_review_summary(batch: dict) -> dict:
+    rules = normalize_payroll_validation_rules(batch.get("payrollValidationRules"))
+    official_domain = normalize_email_domain(batch.get("emailDomain") or OFFICIAL_EMAIL_DOMAIN)
     staff_by_id = {item.get("id"): item for item in load_json_list_store(STAFF_RECORDS_STORE_PATH)}
     baseline_by_staff = {item.get("staffRecordId"): item for item in batch.get("baselineEntries", [])}
     salary_changes, missing_emails, invalid_emails, inactive_staff, suspicious = [], [], [], [], []
@@ -3127,19 +3354,19 @@ def payroll_review_summary(batch: dict) -> dict:
         email = str(entry.get("email") or "").strip().lower()
         if not email:
             missing_emails.append(identity)
-        elif not email.endswith(OFFICIAL_EMAIL_DOMAIN):
+        elif not email.endswith(official_domain):
             invalid_emails.append({**identity, "email": email})
         if str(staff.get("employmentStatus", "inactive")).lower() != "active":
             inactive_staff.append(identity)
         flags = []
-        if float(entry.get("basicSalary") or 0) > 1_000_000:
-            flags.append("Basic salary exceeds GHS 1,000,000")
-        if any(float(entry.get(field) or 0) > 250_000 for field in PAYROLL_MANUAL_FIELDS if field != "basicSalary"):
-            flags.append("Allowance or deduction exceeds GHS 250,000")
+        if float(entry.get("basicSalary") or 0) > rules["maxBasicSalary"]:
+            flags.append(f"Basic salary exceeds GHS {rules['maxBasicSalary']:,.2f}")
+        if any(float(entry.get(field) or 0) > rules["maxOtherAmount"] for field in PAYROLL_MANUAL_FIELDS if field != "basicSalary"):
+            flags.append(f"Allowance or deduction exceeds GHS {rules['maxOtherAmount']:,.2f}")
         if float(entry.get("netSalary") or 0) < 0:
             flags.append("Deductions exceed income")
-        if float(entry.get("totalIncome") or 0) > 0 and float(entry.get("totalDeductions") or 0) > float(entry.get("totalIncome") or 0) * 0.75:
-            flags.append("Deductions exceed 75% of income")
+        if float(entry.get("totalIncome") or 0) > 0 and float(entry.get("totalDeductions") or 0) > float(entry.get("totalIncome") or 0) * rules["deductionWarningPercent"] / 100:
+            flags.append(f"Deductions exceed {rules['deductionWarningPercent']:g}% of income")
         if flags:
             suspicious.append({**identity, "issues": flags})
     summary = payroll_batch_summary(batch.get("entries", []))
@@ -3154,6 +3381,9 @@ def payroll_review_summary(batch: dict) -> dict:
 
 
 def enrich_payroll_batch(batch: dict) -> dict:
+    batch.setdefault("contributionRates", normalize_contribution_rates(None))
+    batch.setdefault("contributionRateEffectiveMonth", "2000-01")
+    batch.setdefault("payrollValidationRules", normalize_payroll_validation_rules(None))
     batch["reviewSummary"] = payroll_review_summary(batch)
     batch.setdefault("approvalHistory", [])
     return batch
@@ -3213,8 +3443,13 @@ def create_payroll_batch():
         return jsonify({"error": "The selected source payroll is not available"}), 400
     if source and str(source.get("period", "")) >= period:
         return jsonify({"error": "Payroll can only be copied from an earlier month"}), 400
+    portal_settings = load_portal_settings_store()
+    rate_profile = contribution_rate_profile_for_period(period, portal_settings)
+    contribution_rates = rate_profile["rates"]
+    validation_rules = normalize_payroll_validation_rules(portal_settings.get("payrollValidationRules"))
     source_entries = {str(item.get("staffId", "")).lower(): item for item in (source.get("entries", []) if source else [])}
     entries = []
+    baselines = []
     for item in active_staff:
         previous = source_entries.get(str(item.get("staffId", "")).lower(), {})
         payload = {
@@ -3222,13 +3457,30 @@ def create_payroll_batch():
             "email": item.get("email"), "department": item.get("department"), "branch": item.get("branch"),
             **{field: previous.get(field) for field in PAYROLL_MANUAL_FIELDS},
         }
-        entries.append({**calculate_payroll_entry(payload), "changeReason": ""})
+        calculated = calculate_payroll_entry(payload, contribution_rates=contribution_rates, validation_rules=validation_rules)
+        if previous:
+            baseline = {
+                "staffRecordId": item.get("id"), "staffId": item.get("staffId"), "fullName": item.get("fullName"),
+                **{field: previous.get(field) for field in PAYROLL_TRACKED_FIELDS},
+            }
+            change_reason = ""
+            if payroll_entry_changes(calculated, baseline):
+                change_reason = f"Statutory contribution rates or payroll values updated effective {rate_profile['effectiveMonth']}"
+        else:
+            baseline = {key: calculated.get(key) for key in ["staffRecordId", "staffId", "fullName", *PAYROLL_TRACKED_FIELDS]}
+            change_reason = ""
+        entries.append({**calculated, "changeReason": change_reason})
+        baselines.append(baseline)
     now = now_ms()
     batch = {
         "id": f"payroll-{now}-{secrets.randbelow(10000):04d}", "name": name, "period": period,
-        "status": "draft", "entries": entries, "baselineEntries": payroll_baseline(entries),
+        "status": "draft", "entries": entries, "baselineEntries": baselines,
         "summary": payroll_batch_summary(entries), "sourceBatchId": source.get("id") if source else None,
         "sourceBatchName": source.get("name") if source else None, "version": 1, "revisionOf": None,
+        "contributionRates": contribution_rates,
+        "contributionRateEffectiveMonth": rate_profile["effectiveMonth"],
+        "payrollValidationRules": validation_rules,
+        "emailDomain": portal_settings["emailDomain"],
         "requiresChangeApproval": False, "pendingChangeCount": 0,
         "createdBy": auth_user.get("fullname"), "createdById": auth_user.get("id"),
         "createdAt": now, "updatedAt": now, "submittedAt": None,
@@ -3279,7 +3531,12 @@ def save_payroll_batch_draft(batch_id: str):
         entries = []
         for item in incoming:
             existing_entry = existing_by_staff.get(item.get("staffRecordId"), {})
-            calculated = calculate_payroll_entry(item, existing_entry)
+            calculated = calculate_payroll_entry(
+                item,
+                existing_entry,
+                contribution_rates=batch.get("contributionRates"),
+                validation_rules=batch.get("payrollValidationRules"),
+            )
             changes = payroll_entry_changes(calculated, baseline_by_staff.get(calculated.get("staffRecordId")))
             saved_changes = payroll_entry_changes(calculated, existing_entry)
             reason = str(item.get("changeReason") or existing_by_staff.get(item.get("staffRecordId"), {}).get("changeReason") or "").strip()
@@ -3324,7 +3581,11 @@ def submit_payroll_batch(batch_id: str):
         return jsonify({"error": "Payroll batch not found"}), 404
     if batch.get("status") not in {"draft", "corrected"}:
         return jsonify({"error": "Only draft or corrected payroll batches can be submitted"}), 409
-    invalid = [{"staffId": item.get("staffId"), "name": item.get("fullName"), "issues": payroll_entry_issues(item)} for item in batch.get("entries", []) if payroll_entry_issues(item)]
+    invalid = [
+        {"staffId": item.get("staffId"), "name": item.get("fullName"), "issues": payroll_entry_issues(item, batch.get("payrollValidationRules"), batch.get("emailDomain") or OFFICIAL_EMAIL_DOMAIN)}
+        for item in batch.get("entries", [])
+        if payroll_entry_issues(item, batch.get("payrollValidationRules"), batch.get("emailDomain") or OFFICIAL_EMAIL_DOMAIN)
+    ]
     if invalid:
         return jsonify({"error": "Resolve all payroll validation issues before submission", "invalidEntries": invalid}), 400
     baseline_by_staff = {item.get("staffRecordId"): item for item in batch.get("baselineEntries", [])}
@@ -3588,6 +3849,23 @@ def payslip_pdf_settings() -> tuple[dict, str]:
     return settings, logo_path
 
 
+def payslip_pdf_settings_for_batch(batch: dict) -> tuple[dict, str]:
+    settings, logo_path = payslip_pdf_settings()
+    rates = normalize_contribution_rates(batch.get("contributionRates"))
+    settings["deductionLabels"] = {
+        **dict(settings.get("deductionLabels") or {}),
+        "ssf": f"{rates['employeeSsf']:g}% SSF",
+        "esp": f"{rates['employeeEsp']:g}% ESP",
+        "pf": f"{rates['employeePf']:g}% PF",
+    }
+    settings["employerContributionLabels"] = {
+        **dict(settings.get("employerContributionLabels") or {}),
+        "employerSsf": f"Employer SSF ({rates['employerSsf']:g}%)",
+        "employerPf": f"Employer PF ({rates['employerPf']:g}%)",
+    }
+    return settings, logo_path
+
+
 def payslip_ready_batch(batch_id: str) -> tuple[dict | None, object | None]:
     batch = next((item for item in load_json_list_store(PAYROLL_BATCHES_STORE_PATH) if item.get("id") == batch_id), None)
     if not batch:
@@ -3631,7 +3909,7 @@ def download_staff_payslip(batch_id: str, staff_record_id: str):
     entry = next((item for item in batch.get("entries", []) if str(item.get("staffRecordId")) == staff_record_id), None)
     if not entry:
         return jsonify({"error": "Staff payslip was not found in this payroll batch"}), 404
-    issues = payroll_entry_issues(entry)
+    issues = payroll_entry_issues(entry, batch.get("payrollValidationRules"), batch.get("emailDomain") or OFFICIAL_EMAIL_DOMAIN)
     if issues:
         return jsonify({"error": f"Payslip cannot be generated: {', '.join(issues)}"}), 400
     try:
@@ -3639,7 +3917,7 @@ def download_staff_payslip(batch_id: str, staff_record_id: str):
         password = payslip_password_for(entry, password_rule, custom_password)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-    settings, logo_path = payslip_pdf_settings()
+    settings, logo_path = payslip_pdf_settings_for_batch(batch)
     pdf_bytes = protect_pdf(generate_payslip_pdf(batch, entry, str(settings.get("bankName") or "Bawjiase Community Bank PLC"), logo_path, settings), password)
     filename = secure_filename(f"{entry.get('staffId')}-{batch.get('period')}-payslip-v{batch.get('version', 1)}.pdf")
     mark_payroll_generated(batch_id, auth_user)
@@ -3658,13 +3936,13 @@ def download_batch_payslips_zip(batch_id: str):
     batch, error = payslip_ready_batch(batch_id)
     if error:
         return error
-    settings, logo_path = payslip_pdf_settings()
+    settings, logo_path = payslip_pdf_settings_for_batch(batch)
     archive_buffer = BytesIO()
     try:
         password_rule, custom_password = payslip_password_request()
         with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for entry in batch.get("entries", []):
-                issues = payroll_entry_issues(entry)
+                issues = payroll_entry_issues(entry, batch.get("payrollValidationRules"), batch.get("emailDomain") or OFFICIAL_EMAIL_DOMAIN)
                 if issues:
                     raise ValueError(f"{entry.get('fullName')}: {', '.join(issues)}")
                 password = payslip_password_for(entry, password_rule, custom_password)
@@ -3719,6 +3997,7 @@ def validate_payslip_recipients(batch: dict) -> list[dict]:
     staff_by_id = {item.get("id"): item for item in load_json_list_store(STAFF_RECORDS_STORE_PATH)}
     seen, problems = {}, []
     email_pattern = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    official_domain = normalize_email_domain(batch.get("emailDomain") or OFFICIAL_EMAIL_DOMAIN)
     for entry in batch.get("entries", []):
         staff = staff_by_id.get(entry.get("staffRecordId"))
         email = str(entry.get("email") or "").strip().lower()
@@ -3729,7 +4008,7 @@ def validate_payslip_recipients(batch: dict) -> list[dict]:
             issue = "Staff member is inactive"
         elif not email:
             issue = "Email address is missing"
-        elif not email_pattern.fullmatch(email) or not email.endswith(OFFICIAL_EMAIL_DOMAIN):
+        elif not email_pattern.fullmatch(email) or not email.endswith(official_domain):
             issue = "Email address is invalid"
         elif str(staff.get("email") or "").strip().lower() != email:
             issue = "Staff email changed after payroll approval; correct and reapprove the batch"
@@ -3818,12 +4097,12 @@ def process_payslip_delivery(delivery_id: str) -> None:
             raise RuntimeError(problems[0]["issue"])
         template = record.get("template") or payslip_email_template(batch)
         subject, text_body, html_body = render_payslip_email(template, entry, batch)
-        settings, logo_path = payslip_pdf_settings()
+        settings, logo_path = payslip_pdf_settings_for_batch(batch)
         pdf_password = payslip_password_for(entry, settings.get("pdfPasswordRule", "staff_id"), "")
         pdf_bytes = protect_pdf(generate_payslip_pdf(batch, entry, str(settings.get("bankName") or "Bawjiase Community Bank PLC"), logo_path, settings), pdf_password)
         filename = secure_filename(f"{entry.get('staffId')}-{batch.get('period')}-payslip-v{batch.get('version', 1)}.pdf")
-        send_mail(record["recipientEmail"], subject, text_body, html_body, (filename, pdf_bytes, "application/pdf"))
-        save_delivery_status(delivery_id, "Sent", "", sentAt=now_ms(), subject=subject)
+        message_id = send_mail(record["recipientEmail"], subject, text_body, html_body, (filename, pdf_bytes, "application/pdf"), delivery_id)
+        save_delivery_status(delivery_id, "Sent", "", sentAt=now_ms(), subject=subject, providerMessageId=message_id)
     except smtplib.SMTPRecipientsRefused as exc:
         save_delivery_status(delivery_id, "Bounced", str(exc))
     except Exception as exc:
@@ -3832,8 +4111,23 @@ def process_payslip_delivery(delivery_id: str) -> None:
         update_batch_delivery_status(record.get("batchId"))
 
 
+def payslip_worker_status() -> dict:
+    status = read_json_file(WORKER_STATUS_STORE_PATH, {})
+    last_heartbeat = int(status.get("lastHeartbeat", 0) or 0) if isinstance(status, dict) else 0
+    return {
+        "mode": str(os.getenv("PAYSLIP_WORKER_MODE", "embedded")).strip().lower(),
+        "lastHeartbeat": last_heartbeat,
+        "healthy": bool(last_heartbeat and now_ms() - last_heartbeat < 90_000),
+    }
+
+
+def record_payslip_worker_heartbeat() -> None:
+    atomic_write_json(WORKER_STATUS_STORE_PATH, {"lastHeartbeat": now_ms(), "pid": os.getpid()})
+
+
 def payslip_delivery_worker() -> None:
     while True:
+        record_payslip_worker_heartbeat()
         try:
             delivery_id = PAYSLIP_DELIVERY_QUEUE.get(timeout=2)
         except Empty:
@@ -3949,7 +4243,7 @@ def send_payslip_test_email(batch_id: str):
     template = {"subject": str(data.get("subject") or payslip_email_template(batch)["subject"]), "body": str(data.get("body") or payslip_email_template(batch)["body"])}
     try:
         subject, text_body, html_body = render_payslip_email(template, entry, batch)
-        settings, logo_path = payslip_pdf_settings()
+        settings, logo_path = payslip_pdf_settings_for_batch(batch)
         pdf_password = payslip_password_for(entry, settings.get("pdfPasswordRule", "staff_id"), "")
         pdf_bytes = protect_pdf(generate_payslip_pdf(batch, entry, str(settings.get("bankName") or "Bawjiase Community Bank PLC"), logo_path, settings), pdf_password)
         send_mail(target, f"[TEST] {subject}", text_body, html_body, ("test-payslip.pdf", pdf_bytes, "application/pdf"))
@@ -4054,14 +4348,29 @@ def payslip_delivery_webhook():
     data, error = require_json()
     if error:
         return error
-    status = str(data.get("status", "")).strip().title()
-    if status not in {"Delivered", "Bounced"}:
-        return jsonify({"error": "Webhook status must be Delivered or Bounced"}), 400
-    record = save_delivery_status(str(data.get("deliveryId", "")), status, str(data.get("errorMessage", "")), deliveredAt=now_ms() if status == "Delivered" else None)
-    if not record:
-        return jsonify({"error": "Delivery record not found"}), 404
-    update_batch_delivery_status(record.get("batchId"))
-    return jsonify({"ok": True})
+    events = data.get("events") if isinstance(data.get("events"), list) else [data]
+    records = load_json_list_store(EMAIL_DELIVERY_STORE_PATH)
+    updated = []
+    for event in events[:1000]:
+        if not isinstance(event, dict):
+            continue
+        raw_status = str(event.get("status") or event.get("event") or event.get("notificationType") or "").strip().lower()
+        status = "Delivered" if raw_status in {"delivered", "delivery"} else "Bounced" if raw_status in {"bounced", "bounce", "dropped", "blocked"} else ""
+        if not status:
+            continue
+        custom_args = event.get("customArgs") if isinstance(event.get("customArgs"), dict) else {}
+        delivery_id = str(event.get("deliveryId") or custom_args.get("deliveryId") or "").strip()
+        message_id = str(event.get("messageId") or event.get("smtp-id") or event.get("sg_message_id") or "").strip()
+        if not delivery_id and message_id:
+            match = next((item for item in records if str(item.get("providerMessageId") or "").strip() == message_id), None)
+            delivery_id = str((match or {}).get("id") or "")
+        record = save_delivery_status(delivery_id, status, str(event.get("errorMessage") or event.get("reason") or ""), deliveredAt=now_ms() if status == "Delivered" else None)
+        if record:
+            updated.append(record["id"])
+            update_batch_delivery_status(record.get("batchId"))
+    if not updated:
+        return jsonify({"error": "No matching Delivered or Bounced delivery event was found"}), 404
+    return jsonify({"ok": True, "updated": len(updated)})
 
 
 def normalize_staff_record(data: dict, existing: dict | None = None) -> dict:
@@ -4101,9 +4410,11 @@ def staff_record_conflict(records: list[dict], candidate: dict, exclude_id: str 
 
 @app.route("/api/staff-records", methods=["GET"])
 def list_staff_records():
-    _, _, error = require_authenticated_user()
+    _, auth_user, error = require_authenticated_user()
     if error:
         return error
+    if auth_user.get("role") not in {"SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover"}:
+        return jsonify({"error": "Staff Directory access required"}), 403
     records = load_json_list_store(STAFF_RECORDS_STORE_PATH)
     status = str(request.args.get("status", "all")).strip().lower()
     if status in {"active", "inactive"}:
@@ -4262,7 +4573,7 @@ def get_archived_staff():
     if error:
         return error
     users = load_user_store()
-    return jsonify({"users": [user for user in users if user["isArchived"] and can_view_staff_record(auth_user, user)]})
+    return jsonify({"users": [user for user in users if user.get("role") != "BossAdmin" and user["isArchived"] and can_view_staff_record(auth_user, user)]})
 
 
 @app.route("/api/staff/stats", methods=["GET"])
@@ -4270,7 +4581,7 @@ def get_staff_stats():
     _, _, error = require_staff_manager()
     if error:
         return error
-    users = load_user_store()
+    users = [user for user in load_user_store() if user.get("role") != "BossAdmin"]
     active = [user for user in users if user["isActive"] and not user["isArchived"]]
     by_department = {}
     by_branch = {}
@@ -4291,12 +4602,16 @@ def get_staff_stats():
 
 @app.route("/api/staff/<user_id>", methods=["GET"])
 def get_staff_member(user_id: str):
-    _, _, error = require_authenticated_user()
+    _, auth_user, error = require_authenticated_user()
     if error:
         return error
+    if auth_user.get("role") == "BossAdmin":
+        return jsonify({"error": "Bank staff records are not available to the platform controller"}), 403
     users = load_user_store()
     user = find_user_by_id(users, user_id)
     if not user:
+        return jsonify({"error": "Staff member not found"}), 404
+    if user.get("role") == "BossAdmin":
         return jsonify({"error": "Staff member not found"}), 404
     return jsonify({"user": user})
 
@@ -4318,6 +4633,8 @@ def update_staff(user_id: str):
     user = find_user_by_id(users, user_id)
     if not user:
         return jsonify({"error": "Staff member not found"}), 404
+    if user.get("role") == "BossAdmin":
+        return jsonify({"error": "The platform controller account is isolated from bank user administration"}), 403
     if not can_view_staff_record(auth_user, user):
         return scoped_access_denial(auth_user)
     previous_active = bool(user.get("isActive", False))
@@ -4365,6 +4682,8 @@ def update_staff(user_id: str):
             return jsonify({"error": str(exc)}), 400
     if "role" in data:
         requested_role = str(data.get("role", "")).strip()
+        if requested_role == "BossAdmin":
+            return jsonify({"error": "Boss Admin accounts can only be provisioned from the secure server environment"}), 403
         if requested_role in ALLOWED_ROLES:
             if requested_role == "SuperAdmin" and auth_user["role"] != "SuperAdmin":
                 return jsonify({"error": "Only a Super Admin can assign the Super Admin role"}), 403
@@ -4491,6 +4810,8 @@ def archive_staff(user_id: str):
     user = find_user_by_id(users, user_id)
     if not user:
         return jsonify({"error": "Staff member not found"}), 404
+    if user.get("role") == "BossAdmin":
+        return jsonify({"error": "The platform controller account is isolated from bank user administration"}), 403
     if not can_view_staff_record(auth_user, user):
         return scoped_access_denial(auth_user)
     if user["role"] == "SuperAdmin":
@@ -4521,6 +4842,8 @@ def restore_staff(user_id: str):
     user = find_user_by_id(users, user_id)
     if not user:
         return jsonify({"error": "Staff member not found"}), 404
+    if user.get("role") == "BossAdmin":
+        return jsonify({"error": "The platform controller account is isolated from bank user administration"}), 403
     if not can_view_staff_record(auth_user, user):
         return scoped_access_denial(auth_user)
     user["isArchived"] = False
@@ -4618,7 +4941,7 @@ def auth_login():
     if error:
         return error
     try:
-        email = validate_email(str(data.get("email", "")))
+        email = validate_email(str(data.get("email", "")), enforce_current_domain=False)
         password = str(data.get("passwordHash", ""))
         if not password:
             return jsonify({"error": "Password is required"}), 400
@@ -4845,7 +5168,7 @@ def auth_request_password_reset():
     if error:
         return error
     try:
-        email = validate_email(str(data.get("email", "")))
+        email = validate_email(str(data.get("email", "")), enforce_current_domain=False)
         reset_page_url = str(data.get("resetPageUrl", "")).strip()
 
         users = load_user_store()

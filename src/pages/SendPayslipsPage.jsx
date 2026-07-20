@@ -7,7 +7,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { toast } from '@/components/ui/use-toast';
 import ConfirmActionDialog from '@/components/ui/confirm-action-dialog';
 
-const Card = ({ children, className = '' }) => <section className={`rounded-xl border border-border bg-card p-5 ${className}`}>{children}</section>;
+const Card = ({ children, className = '' }) => <section className={`rounded-xl border border-border bg-card p-4 sm:p-5 ${className}`}>{children}</section>;
 const inputClass = 'h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/25';
 const deliverableStatuses = ['approved', 'generated', 'partially_sent', 'sent'];
 const emptyDelivery = { deliveries: [], template: { subject: '', body: '' }, recipientIssues: [], mailConfigured: false, provider: '', requireTestEmail: true, testEmailSentAt: null };

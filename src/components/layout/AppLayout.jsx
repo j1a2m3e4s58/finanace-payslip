@@ -8,17 +8,22 @@ import { ROLES } from '@/lib/permissions';
 
 export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.localStorage.getItem('bcb-sidebar-collapsed') !== 'false';
+  });
   const [moreOpen, setMoreOpen] = useState(false);
   const moreSheetRef = useRef(null);
   const { user, can } = useAuth();
   const location = useLocation();
   const mobileOrder = {
-    [ROLES.SUPER_ADMIN]: ['/', '/staff', '/users', '/settings', '/profile'],
-    [ROLES.ADMIN]: ['/', '/staff', '/users', '/settings', '/profile'],
+    [ROLES.BOSS_ADMIN]: ['/portal-control', '/profile'],
+    [ROLES.SUPER_ADMIN]: ['/', '/staff', '/users', '/profile'],
+    [ROLES.ADMIN]: ['/', '/staff', '/users', '/profile'],
     [ROLES.FINANCE_OFFICER]: ['/', '/staff', '/payroll/batches', '/salary-history', '/profile'],
     [ROLES.FINANCE_APPROVER]: ['/', '/payroll/approvals', '/payslips/send', '/reports', '/profile'],
     [ROLES.AUDITOR]: ['/audit-logs', '/salary-history', '/reports', '/profile'],
-    [ROLES.MANAGEMENT]: ['/', '/payroll/batches', '/reports', '/profile'],
+    [ROLES.MANAGEMENT]: ['/', '/reports', '/profile'],
   }[user?.role] || ['/profile'];
   const mobileItems = mobileOrder.map((path) => navItems.find((item) => item.path === path)).filter((item) => item && can(item.permission));
   const primaryMobileItems = mobileItems.slice(0, 4);
@@ -26,6 +31,9 @@ export default function AppLayout() {
   const gridClass = extraMobileItems.length ? 'grid-cols-5' : primaryMobileItems.length === 4 ? 'grid-cols-4' : primaryMobileItems.length === 3 ? 'grid-cols-3' : 'grid-cols-2';
   const isActive = (path) => path === '/' ? location.pathname === '/' : location.pathname === path || location.pathname.startsWith(`${path}/`);
   useEffect(() => { setMoreOpen(false); }, [location.pathname]);
+  useEffect(() => {
+    window.localStorage.setItem('bcb-sidebar-collapsed', String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
   useEffect(() => {
     if (!moreOpen) return undefined;
     const previousOverflow = document.body.style.overflow;
@@ -46,10 +54,10 @@ export default function AppLayout() {
     return () => { document.body.style.overflow = previousOverflow; document.removeEventListener('keydown', onKeyDown); };
   }, [moreOpen]);
   return <div className="flex min-h-screen bg-background">
-    <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-    <div className="flex min-w-0 flex-1 flex-col">
+    <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((current) => !current)} />
+    <div className="flex min-w-0 flex-1 flex-col transition-[width] duration-300">
       <Header onMenuClick={() => setSidebarOpen(true)} user={user} />
-      <main className="flex-1 overflow-x-hidden p-4 pb-24 lg:p-6"><div className="mx-auto w-full max-w-[1600px]"><Outlet /></div></main>
+      <main className="flex-1 overflow-x-hidden px-3 pb-24 pt-4 sm:px-4 lg:p-6"><div className="mx-auto w-full max-w-[1600px]"><Outlet /></div></main>
       <nav className={`fixed inset-x-0 bottom-0 z-40 grid ${gridClass} border-t border-border bg-background/95 px-2 pb-[calc(.5rem+env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden`}>
         {primaryMobileItems.map((item) => { const Icon = item.icon; const active = isActive(item.path); return <Link key={item.path} to={item.path} className={`flex min-h-12 min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1 py-2 text-[9px] font-semibold ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}><Icon className="h-4 w-4" /><span className="truncate">{item.label.replace('Payroll ', '')}</span></Link>; })}
         {extraMobileItems.length > 0 && <button aria-expanded={moreOpen} aria-controls="mobile-more-navigation" onClick={() => setMoreOpen(true)} className="flex min-h-12 min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1 py-2 text-[9px] font-semibold text-muted-foreground"><MoreHorizontal className="h-4 w-4" /><span>More</span></button>}

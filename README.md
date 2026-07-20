@@ -29,6 +29,8 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 Do not reuse encryption keys and never commit `.env.production`. Sensitive settings also support Docker/Kubernetes secret files by setting `NAME_FILE` instead of `NAME` (for example, `MAIL_PASSWORD_FILE`). MFA enrollment remains unavailable until an MFA or data encryption key is configured. Public registration is disabled by default; administrators create accounts from Users & Access.
 
+Provision the isolated platform controller with `BOSS_ADMIN_EMAIL`, `BOSS_ADMIN_NAME`, and `BOSS_ADMIN_INITIAL_PASSWORD`. This Boss Admin can open Portal Control and their own profile only; bank staff, payroll, payslips, delivery logs, reports, notifications, and user administration remain unavailable. The account is intentionally absent from bank User Management. Use a unique secret and rotate it after first production sign-in.
+
 ## Checks
 
 ```powershell
@@ -50,19 +52,19 @@ The application container runs Waitress, PostgreSQL stores all application docum
 
 ### Render deployment
 
-The included `render.yaml` creates a Docker web service, PostgreSQL database, persistent encrypted-backup/upload disk, HTTPS enforcement, and durable embedded delivery worker. In Render, create a Blueprint from the repository, enter every environment value marked `sync: false`, and generate valid independent Fernet keys for the three encryption-key fields before the first deployment. Set `ALLOWED_ORIGINS` and `PASSWORD_RESET_BASE_URL` to the final Render HTTPS URL. Do not import real staff or payroll information until the health check passes and SMTP, reset email, upload protection, PDF generation, delivery retry, and backup restore have been tested in staging.
+The included `render.yaml` creates a Docker web service, a dedicated background email worker, PostgreSQL, a persistent encrypted-backup/upload disk, and HTTPS enforcement. In Render, create a Blueprint from the repository and enter every value marked `sync: false`. The web and worker must receive the same `DATA_ENCRYPTION_KEY` and SMTP credentials. Generate valid independent Fernet keys before the first deployment. Set `ALLOWED_ORIGINS` and `PASSWORD_RESET_BASE_URL` to the final Render HTTPS URL. Do not import real staff or payroll information until the health check passes and SMTP, reset email, upload protection, PDF generation, delivery retry, and backup restore have been tested in staging.
 
 Install and update the malware scanner used by `MALWARE_SCANNER_COMMAND` (the supplied container installs ClamAV). Production uploads fail closed when the configured scanner is unavailable. Schedule signature updates on the host or rebuild the container regularly.
 
 ## Backups and recovery
 
-Encrypted backups run according to the Settings schedule and are written to `BACKUP_DIR`. Retention is controlled by `BACKUP_RETENTION_COUNT`. A Super Admin can also export and restore encrypted backups from Settings. Keep a copy of `BACKUP_ENCRYPTION_KEY` in the bank's approved secrets vault and test restoration in staging every quarter.
+Encrypted backups run according to the Portal Control schedule and are written to `BACKUP_DIR`. Retention is controlled by `BACKUP_RETENTION_COUNT`. Interactive export and restore remain disabled by default because backups contain confidential bank records; enable `ALLOW_BOSS_ADMIN_DATABASE_MAINTENANCE=true` only for a separately approved maintenance window. Keep a copy of `BACKUP_ENCRYPTION_KEY` in the bank's approved secrets vault and test restoration in staging every quarter.
 
-Audit, payroll, and delivery-log retention periods are controlled in Settings and every change is audited. Those fields define policy; immutable payroll and audit history is not silently deleted. Use the bank's approved archive and disposal procedure before removing historical records.
+Branding, branches, departments, statutory contribution rates, validation thresholds, email/PDF defaults, security policy, and retention schedules are controlled in Portal Control and every change is audited. New payroll batches snapshot the applicable rate profile by effective month, so later changes cannot rewrite old payroll or sent payslips. Those retention fields define policy; immutable payroll and audit history is not silently deleted. Use the bank's approved archive and disposal procedure before removing historical records.
 
 ## Operations and monitoring
 
-- Monitor `/api/health` for database and pending-queue health. A Super Admin can inspect the non-sensitive count snapshot at `/api/metrics`.
+- Monitor `/api/health` for database, pending-queue, and worker-heartbeat health. A Super Admin can inspect the non-sensitive count snapshot at `/api/metrics`.
 - Alert when the health endpoint fails, pending deliveries grow continuously, or `Failed`/`Bounced` email counts rise.
 - Rotate SMTP, webhook, encryption, and backup secrets according to bank policy. Rotation of encryption keys must include a tested data re-encryption or restore plan.
 - Test SMTP outage recovery, duplicate-send prevention, provider bounce webhooks, password reset email delivery, and backup restoration in staging before each production release.

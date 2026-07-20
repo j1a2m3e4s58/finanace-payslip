@@ -47,6 +47,7 @@ function initials(name) {
 }
 
 function roleLabel(role) {
+  if (role === "BossAdmin") return "Boss Admin";
   if (role === "SuperAdmin") return "Super Admin";
   if (role === "Admin") return "Admin";
   if (role === "FinanceOfficer") return "Finance Officer";

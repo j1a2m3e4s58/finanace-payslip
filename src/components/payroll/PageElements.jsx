@@ -32,7 +32,7 @@ export function StatusBadge({ status }) {
     : ['Failed', 'Bounced', 'Inactive', 'Disabled', 'Cancelled', 'Rejected', 'Not Configured'].includes(status)
       ? 'bg-red-500/10 text-red-600 dark:text-red-400'
       : 'bg-amber-500/10 text-amber-700 dark:text-amber-400';
-  return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tone}`}>{status}</span>;
+  return <span className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold ${tone}`}>{status}</span>;
 }
 
 export function EmptyHint({ children }) {

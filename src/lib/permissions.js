@@ -1,4 +1,5 @@
 export const ROLES = {
+  BOSS_ADMIN: 'BossAdmin',
   SUPER_ADMIN: 'SuperAdmin',
   ADMIN: 'Admin',
   FINANCE_OFFICER: 'FinanceOfficer',
@@ -17,12 +18,13 @@ export const ROLE_OPTIONS = [
 ];
 
 const rolePermissions = {
+  [ROLES.BOSS_ADMIN]: ['portal.manage', 'profile.view', 'profile.edit'],
   [ROLES.SUPER_ADMIN]: ['*'],
-  [ROLES.ADMIN]: ['dashboard.view', 'staff.view', 'staff.manage', 'users.view', 'users.manage', 'settings.manage', 'profile.view', 'profile.edit', 'notifications.view'],
+  [ROLES.ADMIN]: ['dashboard.view', 'staff.view', 'staff.manage', 'users.view', 'users.manage', 'profile.view', 'profile.edit', 'notifications.view'],
   [ROLES.FINANCE_OFFICER]: ['dashboard.view', 'staff.view', 'staff.manage', 'payroll.view', 'payroll.prepare', 'payslips.preview', 'delivery.view', 'salary.view', 'profile.view', 'profile.edit', 'notifications.view'],
   [ROLES.FINANCE_APPROVER]: ['dashboard.view', 'staff.view', 'payroll.view', 'payroll.approve', 'payslips.preview', 'payslips.send', 'delivery.view', 'salary.view', 'reports.view', 'profile.view', 'profile.edit', 'notifications.view'],
   [ROLES.AUDITOR]: ['audit.view', 'salary.view', 'reports.view', 'profile.view', 'profile.edit', 'notifications.view'],
-  [ROLES.MANAGEMENT]: ['dashboard.view', 'payroll.view', 'reports.view', 'profile.view', 'profile.edit', 'notifications.view'],
+  [ROLES.MANAGEMENT]: ['dashboard.view', 'reports.view', 'profile.view', 'profile.edit', 'notifications.view'],
 };
 
 export const routePermissions = {
@@ -39,12 +41,14 @@ export const routePermissions = {
   '/audit-logs': 'audit.view',
   '/reports': 'reports.view',
   '/users': 'users.view',
-  '/settings': 'settings.manage',
+  '/portal-control': 'portal.manage',
+  '/settings': 'portal.manage',
   '/profile': 'profile.view',
   '/notifications': 'notifications.view',
 };
 
 export function normalizeRole(role, department = '') {
+  if (role === ROLES.BOSS_ADMIN) return ROLES.BOSS_ADMIN;
   if (role === 'HRAdmin') return ROLES.ADMIN;
   if (role === 'GeneralStaff') {
     if (String(department).toUpperCase() === 'FINANCE') return ROLES.FINANCE_OFFICER;
@@ -56,18 +60,22 @@ export function normalizeRole(role, department = '') {
 
 export function hasPermission(user, permission) {
   if (!user || !permission || user.accountStatus !== 'active') return false;
-  const permissions = rolePermissions[normalizeRole(user.role, user.department)] || [];
+  const normalizedRole = normalizeRole(user.role, user.department);
+  if (permission === 'portal.manage') return normalizedRole === ROLES.BOSS_ADMIN;
+  const permissions = rolePermissions[normalizedRole] || [];
   return permissions.includes('*') || permissions.includes(permission);
 }
 
 export function roleLabel(role) {
+  if (role === ROLES.BOSS_ADMIN) return 'Boss Admin';
   return ROLE_OPTIONS.find((item) => item.value === normalizeRole(role))?.label || 'Management';
 }
 
 export function firstAllowedPath(user, settings = {}) {
   if (user?.mustChangePassword) return '/change-password';
+  if (user?.role === ROLES.BOSS_ADMIN) return '/portal-control';
   const localTesting = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname);
-  const privilegedMfaRequired = !localTesting && settings?.requirePrivilegedMfa !== false;
-  if (privilegedMfaRequired && ['SuperAdmin', 'Admin', 'FinanceOfficer', 'FinanceApprover'].includes(user?.role) && !user?.mfaEnabled) return '/profile';
+  const privilegedMfaRequired = !localTesting && settings?.requirePrivilegedMfa !== false && settings?.mfaEnrollmentAvailable !== false;
+  if (privilegedMfaRequired && ['BossAdmin', 'SuperAdmin', 'Admin', 'FinanceOfficer', 'FinanceApprover'].includes(user?.role) && !user?.mfaEnabled) return '/profile';
   return Object.entries(routePermissions).find(([, permission]) => hasPermission(user, permission))?.[0] || '/profile';
 }

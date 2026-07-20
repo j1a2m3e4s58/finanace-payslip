@@ -30,6 +30,32 @@ def test_payroll_calculations_are_server_side():
     assert result["netSalary"] == 855
 
 
+def test_payroll_calculations_use_configured_rate_snapshot():
+    payload = {field: 0 for field in portal.PAYROLL_MANUAL_FIELDS}
+    payload.update({"basicSalary": 2000, "staffId": "BCB-002", "fullName": "Rate Test"})
+    rates = {"employeeSsf": 6, "employeeEsp": 3, "employeePf": 2, "employerSsf": 14, "employerPf": 7}
+    result = portal.calculate_payroll_entry(payload, contribution_rates=rates)
+    assert result["ssf"] == 120
+    assert result["esp"] == 60
+    assert result["pf"] == 40
+    assert result["employerSsf"] == 280
+    assert result["employerPf"] == 140
+    assert result["netSalary"] == 1780
+
+
+def test_rate_history_selects_profile_by_payroll_month():
+    settings = {
+        "contributionRates": {"employeeSsf": 7, "employeeEsp": 4.5, "employeePf": 4.5, "employerSsf": 13, "employerPf": 5},
+        "contributionRateEffectiveMonth": "2027-01",
+        "contributionRateHistory": [{
+            "effectiveMonth": "2000-01",
+            "rates": {"employeeSsf": 5.5, "employeeEsp": 4.5, "employeePf": 4.5, "employerSsf": 13, "employerPf": 5},
+        }],
+    }
+    assert portal.contribution_rate_profile_for_period("2026-12", settings)["rates"]["employeeSsf"] == 5.5
+    assert portal.contribution_rate_profile_for_period("2027-01", settings)["rates"]["employeeSsf"] == 7
+
+
 def test_negative_payroll_amount_is_rejected():
     payload = {field: 0 for field in portal.PAYROLL_MANUAL_FIELDS}
     payload["basicSalary"] = -1
@@ -57,6 +83,21 @@ def test_new_user_security_fields_are_preserved():
     user = portal.normalize_user({"id": "u1", "email": "finance@bawjiasecommunitybank.com", "department": "FINANCE", "branch": "HEAD OFFICE", "role": "FinanceOfficer", "mustChangePassword": True, "staffRecordId": "staff-1"})
     assert user["mustChangePassword"] is True
     assert user["staffRecordId"] == "staff-1"
+
+
+def test_only_boss_admin_can_open_portal_control(monkeypatch):
+    with portal.app.test_request_context("/"):
+        monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", {"role": "SuperAdmin"}, None))
+        assert portal.require_portal_controller()[2][1] == 403
+        monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", {"role": "BossAdmin"}, None))
+        assert portal.require_portal_controller()[2] is None
+
+
+def test_boss_admin_cannot_view_confidential_payroll(monkeypatch):
+    monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", {"role": "BossAdmin"}, None))
+    with portal.app.test_request_context("/"):
+        _, _, error = portal.require_payroll_viewer()
+    assert error[1] == 403
 
 
 def test_token_storage_never_uses_bearer_value():
@@ -149,3 +190,89 @@ def test_fake_image_upload_is_rejected(tmp_path, monkeypatch):
     uploaded = FileStorage(stream=BytesIO(b"not-an-image"), filename="logo.png", content_type="image/png")
     with pytest.raises(ValueError):
         portal.save_uploaded_media(uploaded, "branding")
+
+
+@pytest.mark.parametrize("role", ["Admin", "Auditor", "Management"])
+def test_non_payroll_roles_cannot_view_confidential_payroll(monkeypatch, role):
+    monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", {"role": role}, None))
+    with portal.app.test_request_context("/"):
+        _, _, error = portal.require_payroll_viewer()
+    assert error[1] == 403
+
+
+@pytest.mark.parametrize("role", ["Admin", "FinanceApprover", "Auditor", "Management"])
+def test_only_finance_officer_can_prepare_payroll(monkeypatch, role):
+    monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", {"role": role}, None))
+    with portal.app.test_request_context("/"):
+        _, _, error = portal.require_payroll_preparer()
+    assert error[1] == 403
+
+
+def test_required_malware_scanner_fails_closed(tmp_path, monkeypatch):
+    upload = tmp_path / "logo.png"
+    upload.write_bytes(b"placeholder")
+    monkeypatch.delenv("MALWARE_SCANNER_COMMAND", raising=False)
+    monkeypatch.setenv("REQUIRE_MALWARE_SCANNER", "true")
+    with pytest.raises(ValueError, match="required"):
+        portal.scan_uploaded_file(str(upload))
+
+
+def test_missing_mfa_key_does_not_create_navigation_trap(monkeypatch):
+    monkeypatch.delenv("MFA_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("DATA_ENCRYPTION_KEY", raising=False)
+    assert portal.mfa_configuration_available() is False
+
+
+def test_delivery_webhook_rejects_invalid_secret(monkeypatch):
+    monkeypatch.setenv("DELIVERY_WEBHOOK_SECRET", "correct-secret")
+    with portal.app.test_request_context(
+        "/api/email-delivery/webhook",
+        method="POST",
+        headers={"X-Delivery-Webhook-Secret": "wrong-secret"},
+        json={"deliveryId": "d1", "status": "Delivered"},
+    ):
+        response, status = portal.payslip_delivery_webhook()
+    assert status == 401
+    assert response.get_json()["error"] == "Invalid webhook signature"
+
+
+def test_delivery_webhook_updates_provider_event(monkeypatch):
+    monkeypatch.setenv("DELIVERY_WEBHOOK_SECRET", "correct-secret")
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: [{"id": "d1", "providerMessageId": "message-1"}])
+    monkeypatch.setattr(portal, "save_delivery_status", lambda delivery_id, status, _error, **_updates: {"id": delivery_id, "status": status, "batchId": "b1"})
+    monkeypatch.setattr(portal, "update_batch_delivery_status", lambda _batch_id: None)
+    with portal.app.test_request_context(
+        "/api/email-delivery/webhook",
+        method="POST",
+        headers={"X-Delivery-Webhook-Secret": "correct-secret"},
+        json={"events": [{"messageId": "message-1", "event": "delivered"}]},
+    ):
+        response = portal.payslip_delivery_webhook()
+    assert response.get_json() == {"ok": True, "updated": 1}
+
+
+def test_bulk_recipient_validation_scales_to_five_hundred(monkeypatch):
+    staff = [
+        {"id": f"s{index}", "employmentStatus": "active", "email": f"staff{index}@bawjiasecommunitybank.com"}
+        for index in range(500)
+    ]
+    batch = {"entries": [
+        {
+            "staffRecordId": item["id"],
+            "staffId": f"BCB-{index:04d}",
+            "fullName": f"Test Staff {index}",
+            "email": item["email"],
+        }
+        for index, item in enumerate(staff)
+    ]}
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: staff)
+    assert portal.validate_payslip_recipients(batch) == []
+
+
+def test_worker_heartbeat_reports_healthy(tmp_path, monkeypatch):
+    heartbeat_path = tmp_path / "worker_status.json"
+    monkeypatch.setattr(portal, "WORKER_STATUS_STORE_PATH", str(heartbeat_path))
+    portal.record_payslip_worker_heartbeat()
+    status = portal.payslip_worker_status()
+    assert status["healthy"] is True
+    assert status["lastHeartbeat"] > 0

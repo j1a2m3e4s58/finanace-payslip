@@ -20,7 +20,7 @@ import Settings from '@/pages/Settings';
 import Reports from '@/pages/ReportsPage';
 import { PayrollApprovals, PayrollEntry } from '@/pages/PayrollModule';
 import PayrollBatches from '@/pages/PayrollBatchesPage';
-import { AddNewStaff } from '@/pages/StaffPages';
+import AddNewStaff from '@/pages/AddNewStaffPage';
 import StaffDirectory from '@/pages/StaffDirectoryPage';
 import UploadStaffEmails from '@/pages/StaffUploadPage';
 import AuditLogs from '@/pages/AuditLogsPage';
@@ -59,7 +59,8 @@ function AuthenticatedApp() {
         <Route path="/audit-logs" element={<RequirePermission permission="audit.view"><AuditLogs /></RequirePermission>} />
         <Route path="/reports" element={<RequirePermission permission="reports.view"><Reports /></RequirePermission>} />
         <Route path="/users" element={<RequirePermission permission="users.view"><UserManagement /></RequirePermission>} />
-        <Route path="/settings" element={<RequirePermission permission="settings.manage"><Settings /></RequirePermission>} />
+        <Route path="/portal-control" element={<RequirePermission permission="portal.manage"><Settings /></RequirePermission>} />
+        <Route path="/settings" element={<RequirePermission permission="portal.manage"><Navigate to="/portal-control" replace /></RequirePermission>} />
         <Route path="/profile" element={<RequirePermission permission="profile.view"><Profile /></RequirePermission>} />
         <Route path="/notifications" element={<RequirePermission permission="notifications.view"><Notifications /></RequirePermission>} />
       </Route>
