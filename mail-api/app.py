@@ -85,7 +85,7 @@ DEFAULT_PORTAL_DEPARTMENTS = [
 DEFAULT_PORTAL_SETTINGS = {
     "bankName": "Bawjiase Community Bank PLC",
     "shortBankName": "BCB",
-    "portalName": "Staff Portal",
+    "portalName": "Finance Payslip Platform",
     "emailDomain": OFFICIAL_EMAIL_DOMAIN,
     "branches": DEFAULT_PORTAL_BRANCHES,
     "departments": DEFAULT_PORTAL_DEPARTMENTS,
@@ -614,6 +614,13 @@ def load_login_attempts() -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+def failed_login_state(email: str) -> dict:
+    entry = load_login_attempts().get(login_attempt_key(email), {})
+    now = now_seconds()
+    failures = [int(value) for value in entry.get("failures", []) if int(value) + LOGIN_ATTEMPT_WINDOW_SECONDS > now]
+    return {"failedLoginAttempts": len(failures), "lockedUntil": int(entry.get("lockedUntil", 0) or 0) * 1000}
+
+
 def login_lock_seconds(email: str) -> int:
     entry = load_login_attempts().get(login_attempt_key(email), {})
     return max(0, int(entry.get("lockedUntil", 0) or 0) - now_seconds())
@@ -838,6 +845,7 @@ def serialize_user_with_presence(user: dict, presence: dict[str, int] | None = N
     serialized["lastSeen"] = last_seen
     serialized["isOnlineNow"] = presence_is_online(presence_map.get(user_id, 0), user_id)
     serialized["mfaEnabled"] = user_mfa_enabled(user_id)
+    serialized.update(failed_login_state(serialized.get("email", "")))
     return serialized
 
 
@@ -1099,18 +1107,21 @@ def load_portal_settings_store() -> dict:
     raw = read_json_file(PORTAL_SETTINGS_STORE_PATH, {})
     if not isinstance(raw, dict):
         raw = {}
+    def finance_text(name: str) -> str:
+        value = str(raw.get(name) or DEFAULT_PORTAL_SETTINGS[name]).strip()
+        return str(DEFAULT_PORTAL_SETTINGS[name]) if "susu" in value.lower() else value
     def labels(name: str) -> dict:
         fallback = DEFAULT_PORTAL_SETTINGS[name]
         incoming = raw.get(name) if isinstance(raw.get(name), dict) else {}
         return {key: str(incoming.get(key) or value).strip() for key, value in fallback.items()}
     return {
-        "bankName": str(raw.get("bankName") or DEFAULT_PORTAL_SETTINGS["bankName"]).strip(),
+        "bankName": finance_text("bankName"),
         "shortBankName": str(raw.get("shortBankName") or DEFAULT_PORTAL_SETTINGS["shortBankName"]).strip(),
-        "portalName": str(raw.get("portalName") or DEFAULT_PORTAL_SETTINGS["portalName"]).strip(),
+        "portalName": finance_text("portalName"),
         "emailDomain": normalize_email_domain(raw.get("emailDomain")),
         "branches": normalize_portal_branches(raw.get("branches")),
         "departments": merge_missing_portal_defaults(raw.get("departments"), DEFAULT_PORTAL_DEPARTMENTS, True),
-        "loginSubtitle": str(raw.get("loginSubtitle") or DEFAULT_PORTAL_SETTINGS["loginSubtitle"]),
+        "loginSubtitle": finance_text("loginSubtitle"),
         "loginButtonText": str(raw.get("loginButtonText") or DEFAULT_PORTAL_SETTINGS["loginButtonText"]),
         "authorizedAccessText": str(raw.get("authorizedAccessText") or DEFAULT_PORTAL_SETTINGS["authorizedAccessText"]),
         "portalControlPassword": str(raw.get("portalControlPassword") or DEFAULT_PORTAL_SETTINGS["portalControlPassword"]),
@@ -1124,7 +1135,7 @@ def load_portal_settings_store() -> dict:
         "bankAddress": str(raw.get("bankAddress") or DEFAULT_PORTAL_SETTINGS["bankAddress"]).strip(),
         "bankLogo": str(raw.get("bankLogo") or DEFAULT_PORTAL_SETTINGS["bankLogo"]).strip(),
         "authorizedSignature": str(raw.get("authorizedSignature") or "").strip(),
-        "emailFooter": str(raw.get("emailFooter") or DEFAULT_PORTAL_SETTINGS["emailFooter"]).strip(),
+        "emailFooter": finance_text("emailFooter"),
         "payslipTitle": str(raw.get("payslipTitle") or DEFAULT_PORTAL_SETTINGS["payslipTitle"]).strip(),
         "confidentialityNote": str(raw.get("confidentialityNote") or DEFAULT_PORTAL_SETTINGS["confidentialityNote"]).strip(),
         "allowanceLabels": labels("allowanceLabels"), "deductionLabels": labels("deductionLabels"),
@@ -2224,7 +2235,7 @@ def report_rows(report_type: str) -> list[dict]:
 
 
 def report_filters_from_request() -> dict:
-    return {key: str(request.args.get(key, "")).strip() for key in ["month", "year", "department", "branch", "staff", "search"]}
+    return {key: str(request.args.get(key, "")).strip() for key in ["month", "year", "department", "branch", "staff", "search", "dateFrom", "dateTo", "action"]}
 
 
 def filter_report_rows(rows: list[dict], filters: dict) -> list[dict]:
@@ -2242,6 +2253,15 @@ def filter_report_rows(rows: list[dict], filters: dict) -> list[dict]:
         if filters.get("staff") and filters["staff"].lower() not in str(row.get("staff", "")).lower():
             continue
         if filters.get("search") and filters["search"].lower() not in " ".join(str(value) for value in row.values()).lower():
+            continue
+        if filters.get("action") and str(row.get("action", "")).lower() != filters["action"].lower():
+            continue
+        row_date = next((str(row.get(key, ""))[:10] for key in ["dateTime", "sentTime", "changedTime", "updatedTime"] if row.get(key)), "")
+        if not row_date and period:
+            row_date = f"{period[:7]}-01" if len(period) >= 7 else ""
+        if filters.get("dateFrom") and (not row_date or row_date < filters["dateFrom"]):
+            continue
+        if filters.get("dateTo") and (not row_date or row_date > filters["dateTo"]):
             continue
         filtered.append(row)
     return filtered
@@ -2360,6 +2380,51 @@ def get_system_settings():
     safe["smtpPasswordConfigured"] = bool(env_secret("MAIL_PASSWORD"))
     safe["canManageBackups"] = auth_user.get("role") == "SuperAdmin"
     return jsonify({"settings": safe})
+
+
+@app.route("/api/system-settings/test-smtp", methods=["POST", "OPTIONS"])
+def test_smtp_configuration():
+    preflight = handle_options()
+    if preflight:
+        return preflight
+    _, auth_user, error = require_authenticated_user()
+    if error:
+        return error
+    if auth_user.get("role") not in {"SuperAdmin", "Admin"}:
+        return jsonify({"error": "Administrator access required"}), 403
+    try:
+        cfg = mail_config()
+        smtp_class = smtplib.SMTP_SSL if cfg["MAIL_SECURITY"] == "ssl" else smtplib.SMTP
+        with smtp_class(str(cfg["MAIL_SERVER"]), int(cfg["MAIL_PORT"]), timeout=20) as smtp:
+            if cfg["MAIL_SECURITY"] == "starttls":
+                smtp.starttls()
+            smtp.login(str(cfg["MAIL_USERNAME"]), str(cfg["MAIL_PASSWORD"]))
+        record_audit_log(auth_user, "TEST_SMTP_CONFIGURATION", {"server": cfg["MAIL_SERVER"], "port": cfg["MAIL_PORT"], "result": "success"})
+        return jsonify({"ok": True, "message": "SMTP connection and authentication succeeded"})
+    except Exception as exc:
+        record_audit_log(auth_user, "TEST_SMTP_CONFIGURATION", {"result": "failed", "error": str(exc)[:300]})
+        return jsonify({"error": f"SMTP test failed: {exc}"}), 503
+
+
+@app.route("/api/system-settings/test-pdf", methods=["POST", "OPTIONS"])
+def test_pdf_configuration():
+    preflight = handle_options()
+    if preflight:
+        return preflight
+    _, auth_user, error = require_authenticated_user()
+    if error:
+        return error
+    if auth_user.get("role") not in {"SuperAdmin", "Admin"}:
+        return jsonify({"error": "Administrator access required"}), 403
+    try:
+        settings, logo_path = payslip_pdf_settings()
+        sample = calculate_payroll_entry({"staffRecordId": "configuration-test", "staffId": "BCB-TEST", "fullName": "Configuration Test", "email": auth_user.get("email"), "department": "FINANCE", "branch": "HEAD OFFICE", **{field: (1000 if field == "basicSalary" else 0) for field in PAYROLL_MANUAL_FIELDS}})
+        content = generate_payslip_pdf({"name": "Configuration Test Payroll", "period": datetime.now().strftime("%Y-%m"), "version": 1}, sample, str(settings.get("bankName") or "Bawjiase Community Bank PLC"), logo_path, settings)
+        record_audit_log(auth_user, "TEST_PDF_CONFIGURATION", {"result": "success", "bytes": len(content), "passwordRule": settings.get("pdfPasswordRule")})
+        return jsonify({"ok": True, "message": "PDF configuration generated a valid sample payslip", "bytes": len(content)})
+    except Exception as exc:
+        record_audit_log(auth_user, "TEST_PDF_CONFIGURATION", {"result": "failed", "error": str(exc)[:300]})
+        return jsonify({"error": f"PDF configuration test failed: {exc}"}), 500
 
 
 @app.route("/api/portal-settings", methods=["POST", "OPTIONS"])
@@ -2794,6 +2859,24 @@ def get_user(user_id: str):
     presence = prune_presence(load_presence_store())
     save_presence_store(presence)
     return jsonify({"user": serialize_user_with_presence(user, presence)})
+
+
+@app.route("/api/users/<user_id>/activity", methods=["GET"])
+def get_user_activity(user_id: str):
+    _, _, error = require_staff_manager()
+    if error:
+        return error
+    user = find_user_by_id(load_user_store(), user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    identifiers = [str(user_id).lower(), str(user.get("email", "")).lower(), str(user.get("fullname", "")).lower()]
+    activity = []
+    for item in load_audit_logs_store():
+        searchable = " ".join(str(value) for value in item.values()).lower()
+        if str(item.get("actorId", "")) == user_id or any(value and value in searchable for value in identifiers):
+            activity.append(item)
+    activity.sort(key=lambda item: int(item.get("timestamp", 0) or 0), reverse=True)
+    return jsonify({"activity": activity[:100]})
 
 
 @app.route("/api/users/<user_id>/profile", methods=["POST", "OPTIONS"])
@@ -4328,8 +4411,17 @@ def update_staff(user_id: str):
             return jsonify({"error": "Only a Super Admin can change another Super Admin account"}), 403
         user["accountStatus"] = account_status
         user["isActive"] = account_status == "active"
-        if account_status != "active":
-            revoke_user_sessions(user_id)
+        should_revoke_sessions = account_status != "active"
+    else:
+        should_revoke_sessions = False
+    was_active_super_admin = before_staff.get("role") == "SuperAdmin" and before_staff.get("accountStatus", "active") == "active"
+    remains_active_super_admin = user.get("role") == "SuperAdmin" and user.get("accountStatus", "active") == "active"
+    if was_active_super_admin and not remains_active_super_admin:
+        other_active_super_admins = [item for item in users if item.get("id") != user_id and item.get("role") == "SuperAdmin" and item.get("accountStatus", "active") == "active"]
+        if not other_active_super_admins:
+            return jsonify({"error": "The final active Super Admin cannot be disabled, suspended, or assigned another role"}), 409
+    if should_revoke_sessions:
+        revoke_user_sessions(user_id)
     save_user_store(users)
     if dict(user) != before_staff:
         record_audit_log(

@@ -120,6 +120,9 @@ export async function getSecurityStatus() {
   return data.security;
 }
 
+export async function testSmtpConfiguration() { return apiRequest('/system-settings/test-smtp', { method: 'POST', body: {} }); }
+export async function testPdfConfiguration() { return apiRequest('/system-settings/test-pdf', { method: 'POST', body: {} }); }
+
 export async function getMfaStatus() { return apiRequest('/auth/mfa/status'); }
 export async function startMfaEnrollment() { return apiRequest('/auth/mfa/enroll', { method: 'POST', body: {} }); }
 export async function confirmMfaEnrollment(code) { return apiRequest('/auth/mfa/confirm', { method: 'POST', body: { code } }); }
@@ -277,6 +280,11 @@ export function getBatchPayslipsZip(batchId, options = {}) {
 export async function getUsers() {
   const data = await apiRequest("/users");
   return (data.users || []).map(normalizeUser);
+}
+
+export async function getUserActivity(userId) {
+  const data = await apiRequest(`/users/${userId}/activity`);
+  return data.activity || [];
 }
 
 export async function createUser(payload) {
