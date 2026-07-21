@@ -13,6 +13,8 @@ services:
           property: connectionString
       - key: REQUIRE_POSTGRESQL
         value: "true"
+      - key: VALIDATE_PRODUCTION_CONFIG
+        value: "true"
       - key: PORTAL_DATA_DIR
         value: /var/lib/bcb
       - key: BACKUP_DIR
@@ -26,7 +28,7 @@ services:
       - key: FORCE_HTTPS
         value: "true"
       - key: ALLOW_SELF_REGISTRATION
-        value: "true"
+        value: "false"
       - key: BOSS_ADMIN_EMAIL
         sync: false
       - key: BOSS_ADMIN_NAME
@@ -78,15 +80,27 @@ services:
           property: connectionString
       - key: REQUIRE_POSTGRESQL
         value: "true"
+      - key: VALIDATE_PRODUCTION_CONFIG
+        value: "true"
       - key: PORTAL_DATA_DIR
         value: /tmp/bcb
       - key: PAYSLIP_WORKER_MODE
         value: external
       - key: DISABLE_BACKUP_SCHEDULER
         value: "true"
+      - key: MALWARE_SCANNER_COMMAND
+        value: /usr/bin/clamscan
+      - key: REQUIRE_MALWARE_SCANNER
+        value: "true"
+      - key: FORCE_HTTPS
+        value: "true"
+      - key: ALLOW_SELF_REGISTRATION
+        value: "false"
       - key: DATA_ENCRYPTION_KEY
         sync: false
       - key: MFA_ENCRYPTION_KEY
+        sync: false
+      - key: BACKUP_ENCRYPTION_KEY
         sync: false
       - key: MAIL_SERVER
         sync: false
@@ -99,6 +113,12 @@ services:
       - key: MAIL_PASSWORD
         sync: false
       - key: MAIL_DEFAULT_SENDER
+        sync: false
+      - key: DELIVERY_WEBHOOK_SECRET
+        sync: false
+      - key: PASSWORD_RESET_BASE_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
         sync: false
 
 databases:

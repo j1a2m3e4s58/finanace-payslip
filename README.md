@@ -57,6 +57,17 @@ npm run check
 
 This runs ESLint, the production frontend build, database/security/payroll unit tests, and Python imports used by the tests.
 
+Additional release gates:
+
+```powershell
+npm run test:a11y
+npm run test:load
+npm run test:e2e
+python scripts/check-production-config.py
+```
+
+The accessibility gate scans public sign-in and the principal authenticated pages for serious WCAG violations, verifies keyboard skip navigation, and checks reduced-motion behavior. The load gate uses 2,000 synthetic staff records and never reads real payroll data. The production configuration gate fails without PostgreSQL, independent encryption keys, HTTPS, explicit origins, SMTP, signed delivery webhooks, and fail-closed malware scanning. CI also performs an encrypted PostgreSQL restore into a disposable database and deletes that database after hash verification.
+
 ## Staging and production
 
 1. Install Docker and Docker Compose on a controlled server.
@@ -70,7 +81,7 @@ The application container runs Waitress, PostgreSQL stores all application docum
 
 ### Render deployment
 
-The included `render.yaml` creates a Docker web service, a dedicated background email worker, PostgreSQL, a persistent encrypted-backup/upload disk, and HTTPS enforcement. In Render, create a Blueprint from the repository and enter every value marked `sync: false`. The web and worker must receive the same `DATA_ENCRYPTION_KEY` and SMTP credentials. Generate valid independent Fernet keys before the first deployment. Set `ALLOWED_ORIGINS` and `PASSWORD_RESET_BASE_URL` to the final Render HTTPS URL. Do not import real staff or payroll information until the health check passes and SMTP, reset email, upload protection, PDF generation, delivery retry, and backup restore have been tested in staging.
+The included `render.yaml` creates a Docker web service, a dedicated background email worker, PostgreSQL, a persistent encrypted-backup/upload disk, and HTTPS enforcement. In Render, create a Blueprint from the repository and enter every value marked `sync: false`. The web and worker must receive the same encryption, SMTP, webhook, origin, and password-reset settings. Both processes now validate production configuration before starting. Generate valid independent Fernet keys before the first deployment. Set `ALLOWED_ORIGINS` and `PASSWORD_RESET_BASE_URL` to the final Render HTTPS URL. Public self-registration remains disabled. Do not import real staff or payroll information until the health check passes and SMTP, reset email, upload protection, PDF generation, delivery retry, and backup restore have been tested in staging.
 
 Install and update the malware scanner used by `MALWARE_SCANNER_COMMAND` (the supplied container installs ClamAV). Production uploads fail closed when the configured scanner is unavailable. Schedule signature updates on the host or rebuild the container regularly.
 

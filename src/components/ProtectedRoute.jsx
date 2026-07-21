@@ -2,13 +2,14 @@ import React from "react";
 import { Outlet } from "react-router-dom";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/lib/AuthContext";
+import { AppLoadingState } from "@/components/SystemStateBoundary";
 
 export default function ProtectedRoute({ unauthenticatedElement = null }) {
   const { isAuthenticated, isLoadingAuth, isLoadingPublicSettings, portalSettings, user } = useAuth();
   const location = useLocation();
 
   if (isLoadingAuth || isLoadingPublicSettings) {
-    return null;
+    return <AppLoadingState label="Verifying your secure session…" />;
   }
 
   if (!isAuthenticated) return unauthenticatedElement;

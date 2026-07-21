@@ -18,9 +18,9 @@ export default function MetricCard({ label, value, icon: Icon, color = 'blue', l
       <div className="flex items-center justify-between mb-3">
         <div className={`w-9 h-9 lg:w-10 lg:h-10 rounded-lg ${c.bg} flex items-center justify-center`}>
           {loading ? (
-            <div className="w-4 h-4 border-2 border-muted-foreground/30 border-t-foreground rounded-full animate-spin" />
+            <div aria-hidden="true" className="w-4 h-4 border-2 border-muted-foreground/30 border-t-foreground rounded-full animate-spin motion-reduce:animate-none" />
           ) : (
-            <Icon className={`w-4 h-4 lg:w-5 lg:h-5 ${c.text}`} />
+            <Icon aria-hidden="true" className={`w-4 h-4 lg:w-5 lg:h-5 ${c.text}`} />
           )}
         </div>
       </div>
@@ -28,7 +28,7 @@ export default function MetricCard({ label, value, icon: Icon, color = 'blue', l
         {loading ? '—' : value}
       </p>
       <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
-      {sublabel && <p className="text-[11px] text-muted-foreground/70 mt-0.5">{sublabel}</p>}
+      {sublabel && <p className="text-[11px] text-muted-foreground mt-0.5">{sublabel}</p>}
     </div>
   );
   return to ? <Link to={to} className="block rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/30" aria-label={`Open ${label} records`}>{content}</Link> : content;

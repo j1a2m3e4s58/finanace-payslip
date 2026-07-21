@@ -9,6 +9,7 @@ Complete this gate in a separate staging environment before entering real salary
 - Give the web and worker the same data-encryption key and SMTP values.
 - Set `MAIL_DEFAULT_SENDER`, `PASSWORD_RESET_BASE_URL`, `ALLOWED_ORIGINS`, and a long random `DELIVERY_WEBHOOK_SECRET`.
 - Keep `REQUIRE_POSTGRESQL=true`, `FORCE_HTTPS=true`, `PAYSLIP_WORKER_MODE=external`, and `REQUIRE_MALWARE_SCANNER=true`.
+- Keep `VALIDATE_PRODUCTION_CONFIG=true` and `ALLOW_SELF_REGISTRATION=false`; unsafe production configuration must stop startup.
 - Confirm Settings → Security reports HTTPS, encryption, SMTP, webhook, malware scanning, and the dedicated worker as Ready.
 
 ## Delivery verification
@@ -26,6 +27,9 @@ Complete this gate in a separate staging environment before entering real salary
 - Upload a harmless antivirus test file in staging and confirm the upload is blocked.
 - Download an encrypted backup, restore it into staging, and compare staff, payroll, audit, and delivery totals.
 - Review response security headers and run an approved vulnerability scan before board acceptance.
+- Review weekly CodeQL findings and manually run **Approved Staging Security Scan** against the approved HTTPS staging deployment; resolve the OWASP ZAP report before real salaries are introduced.
+- Run `python scripts/postgres-recovery-drill.py` with `TEST_POSTGRES_DATABASE_URL` pointing only to an approved test/staging database. The drill creates and removes a disposable restore database and compares SHA-256 content hashes without printing records.
+- Forward JSON `api_request`, `payslip_delivery_failed`, and `payslip_delivery_bounced` events to restricted monitoring and alert on repeated failures.
 
 ## Device acceptance
 

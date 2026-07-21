@@ -36,10 +36,11 @@ export default function AppLayout() {
     window.localStorage.setItem('bcb-sidebar-collapsed', String(sidebarCollapsed));
   }, [sidebarCollapsed]);
   return <div className="flex min-h-screen bg-background">
+    <a href="#main-content" className="fixed left-3 top-3 z-[120] -translate-y-24 rounded-lg bg-primary px-4 py-3 font-bold text-primary-foreground shadow-xl transition-transform focus:translate-y-0">Skip to main content</a>
     <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((current) => !current)} />
     <div className="flex min-w-0 flex-1 flex-col transition-[width] duration-300">
       <Header onMenuClick={() => setSidebarOpen(true)} user={user} />
-      <main className="flex-1 overflow-x-hidden px-3 pb-24 pt-4 sm:px-4 lg:p-6"><div className="mx-auto w-full max-w-[1600px]"><Outlet /></div></main>
+      <main id="main-content" tabIndex={-1} className="flex-1 overflow-x-hidden px-3 pb-24 pt-4 outline-none sm:px-4 lg:p-6"><div className="mx-auto w-full max-w-[1600px]"><Outlet /></div></main>
       <nav className={`fixed inset-x-0 bottom-0 z-40 grid ${gridClass} border-t border-border bg-background/95 px-2 pb-[calc(.5rem+env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden`}>
         {primaryMobileItems.map((item) => { const Icon = item.icon; const active = isActive(item.path); return <Link key={item.path} to={item.path} className={`flex min-h-12 min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1 py-2 text-[9px] font-semibold ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}><Icon className="h-4 w-4" /><span className="truncate">{item.label.replace('Payroll ', '')}</span></Link>; })}
         {extraMobileItems.length > 0 && <button ref={moreButtonRef} aria-expanded={moreOpen} aria-controls="mobile-more-navigation" onClick={() => setMoreOpen(true)} className="flex min-h-12 min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1 py-2 text-[9px] font-semibold text-muted-foreground"><MoreHorizontal className="h-4 w-4" /><span>More</span></button>}

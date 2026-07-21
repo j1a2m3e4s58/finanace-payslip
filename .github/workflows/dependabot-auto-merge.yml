@@ -1,8 +1,7 @@
 name: Dependabot auto-merge
 
-# Auto-merge Dependabot's patch/minor updates once required checks pass; leave majors for
-# a human. Rule-based (semver) — the deeper, investigating merge judgment lives in the
-# separate holistic security bot.
+# Auto-merge Dependabot patch/minor updates after required checks pass. Major
+# updates always remain for explicit human review.
 on: pull_request
 
 permissions:
@@ -30,4 +29,5 @@ jobs:
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr comment "$PR_URL" --body "🚧 Major update — not auto-merged (policy: auto-merge patch/minor only). Leaving for human review."
+        run: |
+          gh pr comment "$PR_URL" --body "Major update — not auto-merged (policy: auto-merge patch/minor only). Leaving for human review."

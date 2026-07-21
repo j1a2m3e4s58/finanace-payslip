@@ -172,7 +172,7 @@ def env_secret(name: str) -> str:
 
 
 def self_registration_enabled() -> bool:
-    return str(os.getenv("ALLOW_SELF_REGISTRATION", "true")).strip().lower() in {"1", "true", "yes"}
+    return str(os.getenv("ALLOW_SELF_REGISTRATION", "false")).strip().lower() in {"1", "true", "yes"}
 
 
 def boss_database_maintenance_enabled() -> bool:
@@ -295,6 +295,18 @@ def add_cors_headers(response):
     if request.path.startswith("/api/") or response.mimetype in {"application/pdf", "application/zip"}:
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
         response.headers["Pragma"] = "no-cache"
+    if request.path.startswith("/api/"):
+        duration_ms = round((time.perf_counter() - started) * 1000, 1) if started is not None else None
+        event = {
+            "event": "api_request",
+            "requestId": getattr(g, "request_id", ""),
+            "endpoint": request.endpoint or "unknown",
+            "method": request.method,
+            "status": response.status_code,
+            "durationMs": duration_ms,
+        }
+        log = app.logger.warning if response.status_code >= 400 else app.logger.info
+        log(json.dumps(event, ensure_ascii=True, separators=(",", ":")))
     return response
 
 
@@ -4105,8 +4117,10 @@ def process_payslip_delivery(delivery_id: str) -> None:
         save_delivery_status(delivery_id, "Sent", "", sentAt=now_ms(), subject=subject, providerMessageId=message_id)
     except smtplib.SMTPRecipientsRefused as exc:
         save_delivery_status(delivery_id, "Bounced", str(exc))
+        app.logger.warning(json.dumps({"event": "payslip_delivery_bounced", "deliveryId": delivery_id, "batchId": record.get("batchId")}, separators=(",", ":")))
     except Exception as exc:
         save_delivery_status(delivery_id, "Failed", str(exc))
+        app.logger.error(json.dumps({"event": "payslip_delivery_failed", "deliveryId": delivery_id, "batchId": record.get("batchId"), "errorType": type(exc).__name__}, separators=(",", ":")))
     finally:
         update_batch_delivery_status(record.get("batchId"))
 

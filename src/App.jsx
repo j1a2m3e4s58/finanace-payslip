@@ -2,6 +2,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClientInstance } from '@/lib/query-client';
 import { BrowserRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import { ThemeProvider } from '@/lib/ThemeContext';
 import ProtectedRoute from '@/components/ProtectedRoute';
@@ -28,16 +29,17 @@ import SendPayslips from '@/pages/SendPayslipsPage';
 import SalaryHistory from '@/pages/SalaryHistoryPage';
 import PayslipPdfPage from '@/pages/PayslipPreviewPage';
 import UserManagement from '@/pages/UserManagement';
-import { OfflineBanner, SystemStateBoundary } from '@/components/SystemStateBoundary';
+import { AppLoadingState, OfflineBanner, PageState, SystemStateBoundary } from '@/components/SystemStateBoundary';
 
 const RequirePermission = ({ permission, children }) => {
   const { can, firstAllowedPath } = useAuth();
-  return can(permission) ? children : <Navigate to={firstAllowedPath()} replace />;
+  const navigate = useNavigate();
+  return can(permission) ? children : <PageState type="error" title="Access restricted" message="Your account does not have permission to open this page. No confidential information has been displayed." retryLabel="Go to my workspace" onRetry={() => navigate(firstAllowedPath(), { replace: true })} />;
 };
 
 function AuthenticatedApp() {
   const { isLoadingAuth, isLoadingPublicSettings } = useAuth();
-  if (isLoadingPublicSettings || isLoadingAuth) return <div className="fixed inset-0 flex items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-muted border-t-primary" /></div>;
+  if (isLoadingPublicSettings || isLoadingAuth) return <AppLoadingState />;
   return <Routes>
     <Route path="/login" element={<Login />} />
     <Route path="/register" element={<Register />} />

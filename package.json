@@ -13,6 +13,9 @@
     "test:services": "python -m pytest mail-api/tests/test_service_integration.py -q",
     "test:e2e": "playwright test --project=desktop-chromium && playwright test --project=mobile-chromium",
     "test:e2e:desktop": "playwright test --project=desktop-chromium",
+    "test:a11y": "playwright test tests/e2e/accessibility.spec.js --project=desktop-chromium",
+    "test:load": "python scripts/load-test.py --staff-count 2000 --max-seconds 15",
+    "test:production-config": "python -m pytest mail-api/tests/test_production_readiness.py -q",
     "check": "npm run lint && npm run build && npm run test:backend",
     "preview": "vite preview"
   },
@@ -70,7 +73,6 @@
     "react-hot-toast": "^2.6.0",
     "react-leaflet": "^4.2.1",
     "react-markdown": "^9.0.1",
-    "react-quill": "^2.0.0",
     "react-resizable-panels": "^2.1.7",
     "react-router-dom": "^6.26.0",
     "read-excel-file": "^9.3.1",
@@ -83,6 +85,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
     "@eslint/js": "^9.19.0",
     "@playwright/test": "^1.61.1",
     "@types/node": "^22.13.5",

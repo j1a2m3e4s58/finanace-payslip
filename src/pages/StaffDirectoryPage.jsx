@@ -291,6 +291,7 @@ export default function StaffDirectoryPage() {
             placeholder="Search name, ID, email or branch"
           />
           <select
+            aria-label="Filter staff by employment status"
             className={inputClass}
             value={status}
             onChange={(event) => changeStatusFilter(event.target.value)}
@@ -300,6 +301,7 @@ export default function StaffDirectoryPage() {
             <option value="inactive">Inactive</option>
           </select>
           <select
+            aria-label="Filter staff by department"
             className={inputClass}
             value={department}
             onChange={(event) => setDepartment(event.target.value)}

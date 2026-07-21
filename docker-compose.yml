@@ -23,6 +23,7 @@ services:
       PORTAL_DATA_DIR: /var/lib/bcb
       PAYSLIP_WORKER_MODE: external
       REQUIRE_POSTGRESQL: "true"
+      VALIDATE_PRODUCTION_CONFIG: "true"
     volumes:
       - app_data:/var/lib/bcb
       - backup_data:/var/backups/bcb
@@ -42,6 +43,7 @@ services:
       PORTAL_DATA_DIR: /var/lib/bcb
       PAYSLIP_WORKER_MODE: external
       REQUIRE_POSTGRESQL: "true"
+      VALIDATE_PRODUCTION_CONFIG: "true"
       DISABLE_BACKUP_SCHEDULER: "true"
     volumes:
       - app_data:/var/lib/bcb
