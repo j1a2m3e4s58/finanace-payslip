@@ -39,6 +39,14 @@ npm run check
 
 This runs ESLint, the production frontend build, database/security/payroll unit tests, and Python imports used by the tests.
 
+Run the isolated browser workflow on desktop and mobile with:
+
+```powershell
+npm run test:e2e
+```
+
+The browser suite creates only temporary synthetic staff, payroll and email records under `.tmp/`. It verifies staff deactivation/reactivation, maker-checker correction and approval, PDF preview, private bulk delivery, delivery status and post-send revisioning. Run `npm run test:services` for the local SMTP integration gate; the CI service job also runs the PostgreSQL gate against an ephemeral database.
+
 ## Staging and production
 
 1. Install Docker and Docker Compose on a controlled server.

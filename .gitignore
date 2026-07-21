@@ -18,3 +18,5 @@ mail-api/*.log
 mail-api/__pycache__/
 .pytest_cache/
 __pycache__/
+playwright-report/
+test-results/

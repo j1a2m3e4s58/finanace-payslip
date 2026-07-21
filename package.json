@@ -10,6 +10,9 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc -p ./jsconfig.json",
     "test:backend": "python -m pytest mail-api/tests",
+    "test:services": "python -m pytest mail-api/tests/test_service_integration.py -q",
+    "test:e2e": "playwright test --project=desktop-chromium && playwright test --project=mobile-chromium",
+    "test:e2e:desktop": "playwright test --project=desktop-chromium",
     "check": "npm run lint && npm run build && npm run test:backend",
     "preview": "vite preview"
   },
@@ -81,6 +84,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.19.0",
+    "@playwright/test": "^1.61.1",
     "@types/node": "^22.13.5",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
