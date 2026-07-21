@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import {
   BriefcaseBusiness,
   Building2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Columns3,
@@ -73,7 +74,7 @@ export default function StaffDirectoryPage() {
     : "all";
   const [records, setRecords] = useState([]);
   const [logs, setLogs] = useState([]);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => params.get("search") || "");
   const [status, setStatus] = useState(initialStatus);
   const [department, setDepartment] = useState("all");
   const [page, setPage] = useState(1);
@@ -122,6 +123,9 @@ export default function StaffDirectoryPage() {
   useEffect(() => {
     load();
   }, []);
+  useEffect(() => {
+    setQuery(params.get("search") || "");
+  }, [params]);
 
   const departments = [
     ...new Set(records.map((item) => item.department).filter(Boolean)),
@@ -574,7 +578,20 @@ function ColumnChooser({ columns, setColumns }) {
 
 function CountSummary({ title, icon: Icon, values, empty }) {
   return (
-    <Card className="p-4">
+    <>
+    <details className="group rounded-xl border border-border bg-card md:hidden">
+      <summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 px-4 py-3">
+        <Icon className="h-5 w-5 text-primary" />
+        <span className="font-heading font-bold">{title}</span>
+        <span className="ml-auto text-xs text-muted-foreground">{values.length} groups</span>
+        <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
+        {values.map(([label, count]) => <span key={label} className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs"><b>{label}</b> · {count}</span>)}
+        {!values.length && <span className="text-xs text-muted-foreground">{empty}</span>}
+      </div>
+    </details>
+    <Card className="hidden p-4 md:block">
       <div className="flex items-center gap-2">
         <Icon className="h-5 w-5 text-primary" />
         <h2 className="font-heading font-bold">{title}</h2>
@@ -596,6 +613,7 @@ function CountSummary({ title, icon: Icon, values, empty }) {
         )}
       </div>
     </Card>
+    </>
   );
 }
 
