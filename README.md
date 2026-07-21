@@ -19,6 +19,24 @@ npm run dev
 
 Open `http://localhost:5173`. Local development uses SQLite in `mail-api/data`; production uses PostgreSQL through `DATABASE_URL`.
 
+## Automated testing
+
+Run the backend and service integration suite with:
+
+```powershell
+npm run test:backend
+npm run test:services
+```
+
+Run the complete payroll browser workflow (desktop and mobile) with:
+
+```powershell
+npx playwright install chromium
+npm run test:e2e
+```
+
+The browser suite uses isolated synthetic staff, payroll, PDF, and captured-email data under `.tmp`; it never writes to the normal local database. It verifies staff deactivation/reactivation, maker-checker correction and approval, PDF preview, private bulk delivery, delivery status and post-send revisioning. PostgreSQL integration runs when `TEST_POSTGRES_DATABASE_URL` is configured. GitHub Actions provisions PostgreSQL 17 and executes this production-service gate automatically.
+
 ## Required production secrets
 
 Copy `.env.production.example` to `.env.production` and replace every placeholder. Generate independent Fernet keys with:
@@ -38,14 +56,6 @@ npm run check
 ```
 
 This runs ESLint, the production frontend build, database/security/payroll unit tests, and Python imports used by the tests.
-
-Run the isolated browser workflow on desktop and mobile with:
-
-```powershell
-npm run test:e2e
-```
-
-The browser suite creates only temporary synthetic staff, payroll and email records under `.tmp/`. It verifies staff deactivation/reactivation, maker-checker correction and approval, PDF preview, private bulk delivery, delivery status and post-send revisioning. Run `npm run test:services` for the local SMTP integration gate; the CI service job also runs the PostgreSQL gate against an ephemeral database.
 
 ## Staging and production
 
