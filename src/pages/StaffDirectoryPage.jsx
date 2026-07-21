@@ -15,7 +15,6 @@ import {
   Upload,
   UserPlus,
   UserX,
-  X,
 } from "lucide-react";
 import {
   changeStaffRecordStatus,
@@ -34,6 +33,7 @@ import {
 import { useAuth } from "@/lib/AuthContext";
 import { toast } from "@/components/ui/use-toast";
 import ConfirmActionDialog from "@/components/ui/confirm-action-dialog";
+import ResponsiveSheet from "@/components/ui/responsive-sheet";
 
 const Card = ({ children, className = "" }) => (
   <section
@@ -669,52 +669,18 @@ function StaffDrawer({
   toggleStatus,
 }) {
   const issue = getEmailIssue(person);
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") close();
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [close]);
   return (
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-3 backdrop-blur-sm sm:p-6"
-      onMouseDown={(event) => event.target === event.currentTarget && close()}
+    <ResponsiveSheet
+      open
+      onOpenChange={(next) => !next && close()}
+      title={editing ? `Edit ${person.fullName}` : person.fullName}
+      description={`Staff record ${person.staffId}`}
+      className="md:w-[min(46rem,92vw)]"
     >
-      <aside
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Staff details for ${person.fullName}`}
-        className="flex max-h-[92dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl ring-1 ring-white/10"
-      >
-        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border bg-card px-5 py-4 sm:px-6">
-          <div className="min-w-0">
-            <p className="text-xs font-bold uppercase tracking-widest text-primary">
-              Staff record
-            </p>
-            <h2 className="truncate font-heading text-xl font-bold sm:text-2xl">
-              {editing ? `Edit ${person.fullName}` : person.fullName}
-            </h2>
-            <p className="text-sm text-muted-foreground">{person.staffId}</p>
-          </div>
-          <button
-            type="button"
-            onClick={close}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border hover:bg-muted"
-            aria-label="Close staff details"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </header>
         {editing ? (
           <form
             onSubmit={saveEdit}
-            className="grid gap-4 overflow-y-auto p-4 sm:grid-cols-2 sm:p-6"
+            className="grid gap-4 sm:grid-cols-2"
           >
             <DrawerStaffFields
               form={form}
@@ -722,7 +688,7 @@ function StaffDrawer({
               branches={organization.branches}
               departments={organization.departments}
             />
-            <div className="sticky bottom-0 -mx-4 mt-2 grid grid-cols-2 gap-2 border-t border-border bg-card/95 p-4 backdrop-blur sm:col-span-2 sm:-mx-6 sm:flex sm:justify-end sm:px-6">
+            <div className="sticky bottom-0 -mx-5 mt-2 grid grid-cols-2 gap-2 border-t border-border bg-card/95 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] backdrop-blur sm:col-span-2 sm:-mx-6 sm:flex sm:justify-end sm:px-6">
               <SecondaryButton type="button" onClick={cancelEdit}>
                 Cancel
               </SecondaryButton>
@@ -732,7 +698,7 @@ function StaffDrawer({
             </div>
           </form>
         ) : (
-          <div className="overflow-y-auto p-4 sm:p-6">
+          <div>
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge
                 status={
@@ -791,8 +757,7 @@ function StaffDrawer({
             </div>
           </div>
         )}
-      </aside>
-    </div>
+    </ResponsiveSheet>
   );
 }
 

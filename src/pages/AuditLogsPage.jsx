@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Columns3, Eye, FileSpreadsheet, FileText, Filter, Search, ShieldCheck, X } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Columns3, Eye, FileSpreadsheet, FileText, Filter, Search, ShieldCheck } from 'lucide-react';
 import { exportReport, getReportData } from '@/api/portalClient';
 import { EmptyHint, PageHeader, PrimaryButton, SecondaryButton } from '@/components/payroll/PageElements';
 import { toast } from '@/components/ui/use-toast';
+import ResponsiveSheet from '@/components/ui/responsive-sheet';
 
-const inputClass = 'h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/25';
+const inputClass = 'h-11 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/25';
 const defaultFilters = { search: '', action: '', dateFrom: '', dateTo: '' };
 const defaultColumns = ['dateTime', 'actorName', 'action', 'target', 'ipAddress'];
 const Card = ({ children, className = '' }) => <section className={`rounded-xl border border-border bg-card p-4 sm:p-5 ${className}`}>{children}</section>;
@@ -19,8 +20,9 @@ export default function AuditLogs() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [filterName, setFilterName] = useState('');
-  const [savedFilters, setSavedFilters] = useState(readSaved);
+  const [savedFilters, setSavedFilters] = useState([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  useEffect(() => { window.localStorage.removeItem('bcb_audit_saved_filters'); }, []);
 
   const load = async (next = filters, nextPage = page, nextSize = pageSize) => { setBusy('load'); try { setData(await getReportData('audit_trail', { ...next, page: nextPage, pageSize: nextSize })); setError(''); } catch (err) { setError(err.message); } finally { setBusy(''); } };
   useEffect(() => { load(defaultFilters, 1, pageSize); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -28,7 +30,7 @@ export default function AuditLogs() {
   const actions = useMemo(() => [...new Set([filters.action, ...data.rows.map((row) => row.action)].filter(Boolean))].sort(), [data.rows, filters.action]);
   const apply = (next = filters) => { setPage(1); load(next, 1, pageSize); };
   const shortcut = (key) => { const range = dateRange(key); const next = { ...filters, ...range }; setFilters(next); apply(next); };
-  const saveFilter = () => { const name = filterName.trim(); if (!name) return; const next = [...savedFilters.filter((item) => item.name !== name), { name, filters }]; setSavedFilters(next); localStorage.setItem('bcb_audit_saved_filters', JSON.stringify(next)); setFilterName(''); toast.success('The audit filter is available for future reviews.', { title: 'Filter saved' }); };
+  const saveFilter = () => { const name = filterName.trim(); if (!name) return; const next = [...savedFilters.filter((item) => item.name !== name), { name, filters }]; setSavedFilters(next); setFilterName(''); toast.success('The audit filter is available only for this page visit.', { title: 'Temporary filter saved' }); };
   const applySavedFilter = (index) => { const item = savedFilters[index]; if (!item) return; const next = { ...defaultFilters, ...item.filters }; setFilters(next); apply(next); };
   const download = async (format) => { setBusy(format); try { saveBlob(await exportReport('audit_trail', format, filters)); toast.success('Every matching audit event was included in the export.', { title: 'Audit export ready' }); } catch (err) { setError(err.message); } finally { setBusy(''); } };
 
@@ -58,10 +60,9 @@ export default function AuditLogs() {
 }
 
 function ColumnPicker({ columns, visible, toggle }) { return <details className="relative"><summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-semibold"><Columns3 className="h-4 w-4" /> Columns ({visible.length}/{columns.length})</summary><div className="absolute right-0 z-20 mt-2 w-64 rounded-xl border border-border bg-card p-3 shadow-xl">{columns.map((column) => <label key={column.key} className="flex cursor-pointer gap-2 rounded-lg px-2 py-2 text-sm hover:bg-muted"><input type="checkbox" checked={visible.includes(column.key)} onChange={() => toggle(column.key)} />{column.label}</label>)}</div></details>; }
-function AuditDrawer({ event, columns, onClose }) { if (!event) return null; return <div className="fixed inset-0 z-[80] flex items-end bg-black/55 backdrop-blur-sm md:block" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><aside role="dialog" aria-modal="true" aria-label="Audit evidence" className="max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl border border-border bg-card p-4 shadow-2xl md:ml-auto md:h-full md:max-h-none md:max-w-xl md:rounded-none md:border-y-0 md:border-r-0 md:p-5"><header className="sticky top-0 z-10 mb-5 flex items-center justify-between border-b border-border bg-card pb-4"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-widest text-primary">Audit evidence</p><h2 className="truncate font-heading text-xl font-bold sm:text-2xl">{cleanAction(event.action)}</h2></div><button aria-label="Close audit evidence" onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border hover:bg-muted"><X className="h-5 w-5" /></button></header><div className="space-y-3">{columns.map((column) => <div key={column.key} className={`rounded-xl border p-4 ${['oldValue','newValue'].includes(column.key) ? 'border-primary/20 bg-primary/[.035]' : 'border-border bg-background'}`}><p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{column.label}</p><pre className="mt-1 whitespace-pre-wrap break-words font-sans text-sm font-medium">{display(event[column.key])}</pre></div>)}</div></aside></div>; }
+function AuditDrawer({ event, columns, onClose }) { return <ResponsiveSheet open={Boolean(event)} onOpenChange={(next) => !next && onClose()} title={event ? cleanAction(event.action) : 'Audit evidence'} description="Recorded values and request evidence for this audited action."><div className="space-y-3">{event && columns.map((column) => <div key={column.key} className={`rounded-xl border p-4 ${['oldValue','newValue'].includes(column.key) ? 'border-primary/20 bg-primary/[.035]' : 'border-border bg-background'}`}><p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{column.label}</p><pre className="mt-1 whitespace-pre-wrap break-words font-sans text-sm font-medium">{display(event[column.key])}</pre></div>)}</div></ResponsiveSheet>; }
 function cleanAction(value = '') { return String(value).replaceAll('_',' '); }
 function display(value) { if (value === null || value === undefined || value === '') return '—'; return typeof value === 'object' ? JSON.stringify(value,null,2) : String(value); }
-function readSaved() { try { const value = JSON.parse(localStorage.getItem('bcb_audit_saved_filters') || '[]'); return Array.isArray(value) ? value : []; } catch { return []; } }
 function iso(date) { return date.toISOString().slice(0,10); }
 function dateRange(shortcut) { const today = new Date(); const start = new Date(today); if (shortcut === 'all') return { dateFrom: '', dateTo: '' }; if (shortcut === '7days') start.setDate(today.getDate() - 6); if (shortcut === 'month') start.setDate(1); if (shortcut === 'year') { start.setMonth(0); start.setDate(1); } return { dateFrom: iso(shortcut === 'today' ? today : start), dateTo: iso(today) }; }
 function saveBlob({ blob, filename }) { const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000); }

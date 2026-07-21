@@ -15,15 +15,15 @@ export function PageHeader({ eyebrow = 'Finance workspace', title, description, 
 }
 
 export function PrimaryButton({ children, className = '', ...props }) {
-  return <button className={`inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 ${className}`} {...props}>{children}</button>;
+  return <button className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 ${className}`} {...props}>{children}</button>;
 }
 
 export function SecondaryButton({ children, className = '', ...props }) {
-  return <button className={`inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition hover:bg-muted ${className}`} {...props}>{children}</button>;
+  return <button className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition hover:bg-muted ${className}`} {...props}>{children}</button>;
 }
 
 export function SearchBox({ value, onChange, placeholder = 'Search...' }) {
-  return <div className="relative w-full sm:max-w-sm"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="h-10 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary/25" /></div>;
+  return <div className="relative w-full sm:max-w-sm"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="h-11 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary/25" /></div>;
 }
 
 export function StatusBadge({ status }) {

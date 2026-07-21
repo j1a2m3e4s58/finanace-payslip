@@ -172,7 +172,7 @@ test('staff to payroll approval, PDF, private bulk email, and correction workflo
   await expect(page.getByRole('heading', { name: /payslip pdf preview/i })).toBeVisible();
   await page.getByRole('button', { name: /preview selected/i }).click();
   await expect(page.locator('iframe[title^="Payslip preview"]')).toBeVisible();
-  await expect(page.getByRole('link', { name: /full screen/i })).toBeVisible();
+  await expect(page.getByRole('link', { name: /full[- ]screen/i })).toBeVisible();
 
   const testEmail = await api(page, `/payroll-batches/${batchId}/email-test`, {
     method: 'POST',
@@ -218,4 +218,57 @@ test('small-phone navigation remains usable at 320 pixels', async ({ page }, tes
   await page.getByRole('button', { name: /search staff/i }).click();
   await expect(page.getByPlaceholder(/search staff name, id or email/i)).toBeVisible();
   await expect(page.locator('nav').filter({ hasText: 'More' })).toBeVisible();
+  const moreButton = page.getByRole('button', { name: 'More', exact: true });
+  await moreButton.click();
+  await expect(page.getByRole('dialog', { name: 'More' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'More' })).toBeHidden();
+  await expect(moreButton).toBeFocused();
+});
+
+test('finance workspace fits the complete supported phone-width matrix', async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes('mobile'), 'Responsive matrix belongs to the mobile project');
+  await login(page, 'e2e.admin@bawjiasecommunitybank.com');
+  const widths = [320, 360, 390, 430];
+  const routes = ['/', '/staff', '/users', '/reports', '/audit-logs', '/payslips/preview'];
+
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 844 });
+    for (const route of routes) {
+      await page.goto(route);
+      await expect(page.locator('main')).toBeVisible();
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), {
+        message: `${route} should not overflow horizontally at ${width}px`,
+      }).toBe(true);
+      const shortTargets = await page.locator('main button:visible').evaluateAll((buttons) => buttons
+        .map((button) => ({ label: button.getAttribute('aria-label') || button.textContent?.trim() || 'button', height: button.getBoundingClientRect().height }))
+        .filter((item) => item.height > 0 && item.height < 43.5));
+      expect(shortTargets, `${route} has undersized touch targets at ${width}px`).toEqual([]);
+    }
+  }
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.goto('/users');
+  const manageButton = page.getByRole('button', { name: /manage user/i }).first();
+  await manageButton.click();
+  await expect(page.getByRole('dialog', { name: /manage/i })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: /manage/i })).toBeHidden();
+  await expect(manageButton).toBeFocused();
+});
+
+test('saved report and audit searches never persist in local storage', async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes('mobile'), 'Browser-storage privacy check belongs to the mobile project');
+  await login(page, 'e2e.admin@bawjiasecommunitybank.com');
+  await page.goto('/reports');
+  await page.getByRole('button', { name: /report filters/i }).click();
+  await page.getByPlaceholder('Search this report').fill('E2E private staff search');
+  await page.getByPlaceholder('Name this filter').fill('Temporary report filter');
+  await page.getByRole('button', { name: /save filter/i }).click();
+  await page.goto('/audit-logs');
+  await page.getByRole('button', { name: /audit filters/i }).click();
+  await page.getByPlaceholder(/search users, actions/i).fill('E2E private identifier');
+  await page.getByPlaceholder('Name this filter').fill('Temporary audit filter');
+  await page.getByRole('button', { name: /save filter/i }).click();
+  const sensitiveKeys = await page.evaluate(() => Object.keys(localStorage).filter((key) => /report|audit|staff|search|filter/i.test(key)));
+  expect(sensitiveKeys).toEqual([]);
 });

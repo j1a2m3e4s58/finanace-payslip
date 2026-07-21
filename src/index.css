@@ -123,6 +123,18 @@
   }
 }
 
+@media (max-width: 639px), (pointer: coarse) {
+  button,
+  summary,
+  a[role="button"] {
+    min-height: 44px !important;
+  }
+
+  button:has(> svg:only-child) {
+    min-width: 44px !important;
+  }
+}
+
 @layer utilities {
   .transition-smooth {
     transition:

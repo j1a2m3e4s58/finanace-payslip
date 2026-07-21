@@ -53,6 +53,19 @@ smtp_spec.loader.exec_module(smtp_capture)
 PASSWORD = "E2E-Test#2026!"
 USERS = [
     {
+        "id": "e2e-super-admin",
+        "fullname": "E2E Super Admin",
+        "email": "e2e.admin@bawjiasecommunitybank.com",
+        "phone": "0200000000",
+        "role": "SuperAdmin",
+        "position": "System Administrator",
+        "department": "IT",
+        "branch": "HEAD OFFICE",
+        "accountStatus": "active",
+        "isVerified": True,
+        "mustChangePassword": False,
+    },
+    {
         "id": "e2e-finance-officer",
         "fullname": "E2E Finance Officer",
         "email": "e2e.finance@bawjiasecommunitybank.com",
