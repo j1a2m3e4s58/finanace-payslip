@@ -276,3 +276,24 @@ def test_worker_heartbeat_reports_healthy(tmp_path, monkeypatch):
     status = portal.payslip_worker_status()
     assert status["healthy"] is True
     assert status["lastHeartbeat"] > 0
+
+
+@pytest.mark.parametrize(
+    ("guard", "allowed_roles"),
+    [
+        ("require_portal_controller", {"BossAdmin"}),
+        ("require_staff_manager", {"SuperAdmin", "Admin"}),
+        ("require_staff_records_manager", {"SuperAdmin", "Admin", "FinanceOfficer"}),
+        ("require_payroll_viewer", {"SuperAdmin", "FinanceOfficer", "FinanceApprover"}),
+        ("require_payroll_preparer", {"SuperAdmin", "FinanceOfficer"}),
+        ("require_payroll_approver", {"SuperAdmin", "FinanceApprover"}),
+        ("require_report_viewer", {"SuperAdmin", "FinanceApprover", "Auditor", "Management"}),
+    ],
+)
+def test_complete_role_guard_matrix(monkeypatch, guard, allowed_roles):
+    roles = {"BossAdmin", "SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover", "Auditor", "Management"}
+    with portal.app.test_request_context("/api/role-matrix-test"):
+        for role in roles:
+            monkeypatch.setattr(portal, "require_authenticated_user", lambda current_role=role: ("token", {"role": current_role}, None))
+            _, _, error = getattr(portal, guard)()
+            assert (error is None) is (role in allowed_roles), f"{guard} returned the wrong decision for {role}"

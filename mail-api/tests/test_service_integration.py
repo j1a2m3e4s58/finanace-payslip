@@ -40,39 +40,53 @@ def test_postgresql_transactional_store_round_trip(tmp_path, monkeypatch):
         store.engine.dispose()
 
 
-def test_smtp_service_builds_one_private_message_with_attachment(monkeypatch):
-    capture = ROOT / ".tmp" / "e2e-smtp" / "messages.jsonl"
+def test_smtp_service_builds_ten_private_messages_with_individual_attachments(monkeypatch):
+    capture = ROOT / ".tmp" / "e2e-smtp" / f"messages-{time.time_ns()}.jsonl"
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as port_probe:
+        port_probe.bind(("127.0.0.1", 0))
+        smtp_port = port_probe.getsockname()[1]
+    process_env = os.environ.copy()
+    process_env["E2E_SMTP_PORT"] = str(smtp_port)
+    process_env["E2E_SMTP_OUTPUT"] = str(capture)
     process = subprocess.Popen(
         [sys.executable, str(ROOT / "scripts" / "run-e2e-smtp.py")],
         cwd=ROOT,
+        env=process_env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     try:
-        _wait_for_port("127.0.0.1", 1025)
+        _wait_for_port("127.0.0.1", smtp_port)
         monkeypatch.setenv("MAIL_SERVER", "127.0.0.1")
-        monkeypatch.setenv("MAIL_PORT", "1025")
+        monkeypatch.setenv("MAIL_PORT", str(smtp_port))
         monkeypatch.setenv("MAIL_SECURITY", "none")
         monkeypatch.setenv("MAIL_USERNAME", "integration-user")
         monkeypatch.setenv("MAIL_PASSWORD", "integration-password")
         monkeypatch.setenv("MAIL_DEFAULT_SENDER", "finance@bawjiasecommunitybank.com")
-        message_id = portal.send_mail(
-            "recipient@bawjiasecommunitybank.com",
-            "Integration payslip test",
-            "Private test message",
-            "<p>Private test message</p>",
-            ("test-payslip.pdf", b"%PDF-1.4 synthetic integration payload", "application/pdf"),
-            "integration-delivery",
-        )
-        assert message_id.startswith("<") and message_id.endswith(">")
-        messages = _wait_for_messages(capture, 1)
-        message = messages[-1]
-        assert len(message["recipients"]) == 1
-        assert "recipient@bawjiasecommunitybank.com" in message["recipients"][0]
-        assert "To: recipient@bawjiasecommunitybank.com" in message["data"]
-        assert "Bcc:" not in message["data"]
-        assert 'filename="test-payslip.pdf"' in message["data"]
-        assert "X-BCB-Delivery-ID: integration-delivery" in message["data"]
+        recipients = [f"synthetic.staff{index}@bawjiasecommunitybank.com" for index in range(10)]
+        for index, recipient in enumerate(recipients):
+            message_id = portal.send_mail(
+                recipient,
+                "Integration payslip test",
+                f"Private test message {index}",
+                f"<p>Private test message {index}</p>",
+                (f"test-payslip-{index}.pdf", b"%PDF-1.4 synthetic integration payload", "application/pdf"),
+                f"integration-delivery-{index}",
+            )
+            assert message_id.startswith("<") and message_id.endswith(">")
+        messages = _wait_for_messages(capture, len(recipients))
+        assert len(messages) == len(recipients)
+        for index, (recipient, message) in enumerate(zip(recipients, messages, strict=True)):
+            assert len(message["recipients"]) == 1
+            assert recipient in message["recipients"][0]
+            headers = message["data"].split("\n\n", 1)[0]
+            assert f"To: {recipient}" in headers
+            assert "Bcc:" not in headers
+            assert f'filename="test-payslip-{index}.pdf"' in message["data"]
+            assert f"X-BCB-Delivery-ID: integration-delivery-{index}" in message["data"]
+            for other in recipients:
+                if other != recipient:
+                    assert other not in headers
     finally:
         process.terminate()
         try:

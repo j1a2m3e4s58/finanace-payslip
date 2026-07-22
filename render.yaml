@@ -4,7 +4,8 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: starter
-    healthCheckPath: /api/health
+    healthCheckPath: /api/readiness
+    preDeployCommand: python predeploy.py
     autoDeployTrigger: checksPass
     envVars:
       - key: DATABASE_URL

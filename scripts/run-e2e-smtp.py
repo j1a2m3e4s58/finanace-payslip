@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / ".tmp" / "e2e-smtp" / "messages.jsonl"
+OUTPUT = Path(os.getenv("E2E_SMTP_OUTPUT", ROOT / ".tmp" / "e2e-smtp" / "messages.jsonl"))
+PORT = int(os.getenv("E2E_SMTP_PORT", "1025"))
 OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 OUTPUT.write_text("", encoding="utf-8")
 
@@ -78,7 +80,7 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> 
 
 
 async def main() -> None:
-    server = await asyncio.start_server(handle, "127.0.0.1", 1025)
+    server = await asyncio.start_server(handle, "127.0.0.1", PORT)
     async with server:
         await server.serve_forever()
 

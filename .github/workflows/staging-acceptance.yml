@@ -1,0 +1,26 @@
+name: Approved Staging Acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bcb-staging-acceptance
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify approved staging deployment
+        env:
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          STAGING_ROLE_CREDENTIALS_JSON: ${{ secrets.STAGING_ROLE_CREDENTIALS_JSON }}
+        run: python scripts/staging-smoke.py

@@ -84,3 +84,30 @@ def test_api_responses_apply_security_and_trace_headers():
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
     assert response.headers["Strict-Transport-Security"].startswith("max-age=31536000")
     assert "no-store" in response.headers["Cache-Control"]
+
+
+def test_readiness_requires_postgresql_and_external_worker(monkeypatch):
+    monkeypatch.setattr(portal.DATABASE_STORE, "health", lambda: {"ok": True, "backend": "postgresql"})
+    monkeypatch.setattr(portal, "payslip_worker_status", lambda: {"healthy": True, "mode": "external"})
+    monkeypatch.setenv("PAYSLIP_WORKER_MODE", "external")
+    monkeypatch.delenv("VALIDATE_PRODUCTION_CONFIG", raising=False)
+    with portal.app.test_request_context("/api/readiness"):
+        response, status = portal.readiness()
+    assert status == 200
+    assert response.get_json() == {
+        "ok": True,
+        "database": {"ok": True, "backend": "postgresql"},
+        "configuration": {"ok": True},
+        "worker": {"ok": True, "mode": "external"},
+    }
+
+
+def test_readiness_fails_closed_when_worker_is_unavailable(monkeypatch):
+    monkeypatch.setattr(portal.DATABASE_STORE, "health", lambda: {"ok": True, "backend": "postgresql"})
+    monkeypatch.setattr(portal, "payslip_worker_status", lambda: {"healthy": False, "mode": "external"})
+    monkeypatch.setenv("PAYSLIP_WORKER_MODE", "external")
+    monkeypatch.delenv("VALIDATE_PRODUCTION_CONFIG", raising=False)
+    with portal.app.test_request_context("/api/readiness"):
+        response, status = portal.readiness()
+    assert status == 503
+    assert response.get_json()["worker"] == {"ok": False, "mode": "external"}

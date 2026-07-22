@@ -5,6 +5,8 @@ Complete this gate in a separate staging environment before entering real salary
 ## Render services and secrets
 
 - Deploy both `bawjiase-payslip-platform` and `bawjiase-payslip-worker` from `render.yaml`.
+- The web service runs `python predeploy.py` before release. Deployment is blocked unless production configuration is safe, PostgreSQL is reachable, and schema migrations succeed.
+- Render checks `/api/readiness`, which requires PostgreSQL plus a recent external-worker heartbeat. `/api/health` remains the lower-level diagnostic endpoint.
 - Set independent Fernet values for `DATA_ENCRYPTION_KEY`, `MFA_ENCRYPTION_KEY`, and `BACKUP_ENCRYPTION_KEY`.
 - Give the web and worker the same data-encryption key and SMTP values.
 - Set `MAIL_DEFAULT_SENDER`, `PASSWORD_RESET_BASE_URL`, `ALLOWED_ORIGINS`, and a long random `DELIVERY_WEBHOOK_SECRET`.
@@ -18,11 +20,13 @@ Complete this gate in a separate staging environment before entering real salary
 - Send a 10-user dummy batch, then a 100–500-user dummy batch using non-production recipients.
 - Confirm no message exposes another staff address and each PDF belongs to its recipient.
 - Confirm failed records can be retried separately and delivered/bounced events update the final summary.
+- The automated SMTP service gate sends ten separate synthetic messages and verifies that every message has exactly one recipient, one individual PDF, no BCC header, and no other recipient address.
 - Restart the worker while records are pending and verify they resume without duplicate sends.
 
 ## Security and recovery
 
-- Test all six roles against every protected route and API operation.
+- Test all six bank roles against every protected route and API operation.
+- The backend test suite enforces the complete seven-role matrix, including the isolated Boss Admin control plane. The staging acceptance workflow repeats non-destructive allow/deny checks using dedicated staging accounts.
 - Verify account lockout, password reset expiry, inactivity logout, CSRF rejection, and MFA enrollment.
 - Upload a harmless antivirus test file in staging and confirm the upload is blocked.
 - Download an encrypted backup, restore it into staging, and compare staff, payroll, audit, and delivery totals.
@@ -36,3 +40,11 @@ Complete this gate in a separate staging environment before entering real salary
 - Test current Chrome, Edge, Firefox, Android Chrome, and iOS Safari.
 - Check login, registration, staff import, payroll entry, approval, preview, sending, reports, users, and settings at phone, tablet, laptop, and large-desktop widths.
 - Record approver sign-off, test date, build commit, and any accepted exceptions.
+
+## Approved staging acceptance workflow
+
+1. In the GitHub `staging` environment, configure `STAGING_BASE_URL` with the Render HTTPS URL.
+2. Configure `STAGING_ROLE_CREDENTIALS_JSON` with dedicated synthetic accounts for `SuperAdmin`, `Admin`, `FinanceOfficer`, `FinanceApprover`, `Auditor`, `Management`, and `BossAdmin`. Each entry needs `email` and `password`; add `mfaCode` only when the test account requires it.
+3. Run **Approved Staging Acceptance** from GitHub Actions after Render reports both services deployed.
+4. The workflow verifies HTTPS security headers, PostgreSQL, the external worker, disabled registration, invalid-webhook rejection, CSRF enforcement, login/logout, and the role matrix without changing payroll data.
+5. Run **Approved Staging Security Scan** and the PostgreSQL recovery drill separately. Recovery is intentionally restricted to databases whose names include `test`, `staging`, or `drill`.

@@ -2062,6 +2062,27 @@ def health():
     return jsonify({"ok": ok, "database": database, "deliveryQueue": {"pending": queued, "workerStarted": PAYSLIP_WORKER_STARTED, **worker}}), 200 if ok else 503
 
 
+@app.route("/api/readiness", methods=["GET"])
+def readiness():
+    """Deployment readiness without exposing secrets or confidential records."""
+    database = DATABASE_STORE.health()
+    worker = payslip_worker_status()
+    external_worker_required = str(os.getenv("PAYSLIP_WORKER_MODE", "embedded")).strip().lower() == "external"
+    configuration_ready = True
+    if str(os.getenv("VALIDATE_PRODUCTION_CONFIG", "")).strip().lower() in {"1", "true", "yes"}:
+        from production_config import validate_production_config
+        configuration_ready = not validate_production_config()
+    worker_ready = worker.get("healthy", False) if external_worker_required else PAYSLIP_WORKER_STARTED
+    ready = bool(database.get("ok") and configuration_ready and worker_ready)
+    payload = {
+        "ok": ready,
+        "database": {"ok": bool(database.get("ok")), "backend": database.get("backend")},
+        "configuration": {"ok": configuration_ready},
+        "worker": {"ok": bool(worker_ready), "mode": worker.get("mode")},
+    }
+    return jsonify(payload), 200 if ready else 503
+
+
 @app.route("/api/metrics", methods=["GET"])
 def operational_metrics():
     """Small authenticated operational snapshot without payroll or recipient details."""
