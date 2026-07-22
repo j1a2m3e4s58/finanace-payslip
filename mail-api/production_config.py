@@ -10,7 +10,7 @@ from cryptography.fernet import Fernet
 
 REQUIRED_SECRETS = (
     "DATA_ENCRYPTION_KEY", "MFA_ENCRYPTION_KEY", "BACKUP_ENCRYPTION_KEY",
-    "MAIL_PASSWORD", "DELIVERY_WEBHOOK_SECRET",
+    "MAIL_PASSWORD", "DELIVERY_WEBHOOK_SECRET", "MONITORING_TOKEN",
 )
 
 
@@ -64,6 +64,9 @@ def validate_production_config() -> list[str]:
     webhook_secret = secret_value("DELIVERY_WEBHOOK_SECRET")
     if webhook_secret and len(webhook_secret) < 32:
         errors.append("DELIVERY_WEBHOOK_SECRET must be at least 32 characters")
+    monitoring_token = secret_value("MONITORING_TOKEN")
+    if monitoring_token and len(monitoring_token) < 32:
+        errors.append("MONITORING_TOKEN must be at least 32 characters")
     if not enabled("FORCE_HTTPS"):
         errors.append("FORCE_HTTPS must be true")
     if not enabled("REQUIRE_POSTGRESQL"):
@@ -90,6 +93,14 @@ def validate_production_config() -> list[str]:
         errors.append("MAX_LOGIN_ATTEMPTS must be between 3 and 10")
     if not 5 <= integer_setting("ACCOUNT_LOCKOUT_MINUTES", 15) <= 120:
         errors.append("ACCOUNT_LOCKOUT_MINUTES must be between 5 and 120")
+    if not 1 <= integer_setting("MONITORING_MAX_PENDING_DELIVERIES", 100) <= 10000:
+        errors.append("MONITORING_MAX_PENDING_DELIVERIES must be between 1 and 10000")
+    if not 0 <= integer_setting("MONITORING_MAX_FAILED_DELIVERIES", 0) <= 1000:
+        errors.append("MONITORING_MAX_FAILED_DELIVERIES must be between 0 and 1000")
+    if not 50 <= integer_setting("MONITORING_MAX_STORAGE_PERCENT", 85) <= 95:
+        errors.append("MONITORING_MAX_STORAGE_PERCENT must be between 50 and 95")
+    if not 1 <= integer_setting("MONITORING_MAX_BACKUP_AGE_HOURS", 192) <= 720:
+        errors.append("MONITORING_MAX_BACKUP_AGE_HOURS must be between 1 and 720")
     reset_url = os.getenv("PASSWORD_RESET_BASE_URL", "").strip()
     origins = [item.strip() for item in os.getenv("ALLOWED_ORIGINS", "").split(",") if item.strip()]
     if urlparse(reset_url).scheme != "https":

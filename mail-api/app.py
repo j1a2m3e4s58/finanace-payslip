@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 import secrets
+import shutil
 import smtplib
 import subprocess
 import tempfile
@@ -312,7 +313,7 @@ def add_cors_headers(response):
 
 PUBLIC_API_ENDPOINTS = {
     "health", "get_portal_settings",
-    "auth_register", "auth_login", "auth_request_password_reset", "auth_password_reset", "payslip_delivery_webhook",
+    "auth_register", "auth_login", "auth_request_password_reset", "auth_password_reset", "payslip_delivery_webhook", "monitoring_status",
 }
 
 
@@ -352,6 +353,7 @@ def enforce_transport_and_api_authentication():
         "auth_register": (5, 3600), "auth_request_password_reset": (5, 900), "auth_mfa_enroll": (5, 900), "auth_mfa_confirm": (10, 300),
         "download_staff_payslip": (60, 60), "download_batch_payslips_zip": (10, 300), "export_report_data": (20, 300),
         "send_payslip_test_email": (10, 600), "queue_all_payslip_emails": (3, 600), "resend_failed_payslip_emails": (5, 600),
+        "monitoring_status": (60, 60),
     }
     if request.endpoint in sensitive_limits:
         maximum, window = sensitive_limits[request.endpoint]
@@ -2117,6 +2119,55 @@ def operational_metrics():
         },
         "generatedAt": now_ms(),
     })
+
+
+@app.route("/api/monitoring/status", methods=["GET"])
+def monitoring_status():
+    """Token-protected, non-confidential production signals for alerting."""
+    expected_token = env_secret("MONITORING_TOKEN")
+    supplied_token = str(request.headers.get("X-Monitoring-Token", "")).strip()
+    if not expected_token or not supplied_token or not secrets.compare_digest(supplied_token, expected_token):
+        return jsonify({"error": "Monitoring authentication failed"}), 401
+
+    database = DATABASE_STORE.health()
+    worker = payslip_worker_status()
+    deliveries = load_json_list_store(EMAIL_DELIVERY_STORE_PATH)
+    pending = sum(1 for item in deliveries if item.get("status") in {"Pending", "Sending", "Retried"})
+    failed = sum(1 for item in deliveries if item.get("status") in {"Failed", "Bounced"})
+    max_pending = max(0, int(os.getenv("MONITORING_MAX_PENDING_DELIVERIES", "100")))
+    max_failed = max(0, int(os.getenv("MONITORING_MAX_FAILED_DELIVERIES", "0")))
+
+    usage = shutil.disk_usage(DATA_DIR)
+    storage_percent = round((usage.used / usage.total) * 100, 1) if usage.total else 100.0
+    max_storage_percent = min(99, max(1, int(os.getenv("MONITORING_MAX_STORAGE_PERCENT", "85"))))
+
+    backup_dir = os.getenv("BACKUP_DIR", os.path.join(DATA_DIR, "backups"))
+    backup_files = []
+    if os.path.isdir(backup_dir):
+        backup_files = [os.path.join(backup_dir, name) for name in os.listdir(backup_dir) if name.endswith(".bcbbackup")]
+    newest_backup = max((os.path.getmtime(path) for path in backup_files), default=0)
+    backup_age_hours = round((time.time() - newest_backup) / 3600, 1) if newest_backup else None
+    max_backup_age_hours = max(1, int(os.getenv("MONITORING_MAX_BACKUP_AGE_HOURS", "192")))
+
+    checks = {
+        "database": bool(database.get("ok")),
+        "worker": bool(worker.get("healthy")),
+        "deliveryQueue": pending <= max_pending and failed <= max_failed,
+        "storage": storage_percent < max_storage_percent,
+        "backup": backup_age_hours is not None and backup_age_hours <= max_backup_age_hours,
+    }
+    ok = all(checks.values())
+    return jsonify({
+        "ok": ok,
+        "status": "operational" if ok else "attention_required",
+        "checks": checks,
+        "database": {"backend": database.get("backend"), "ok": bool(database.get("ok"))},
+        "worker": {"mode": worker.get("mode"), "healthy": bool(worker.get("healthy"))},
+        "delivery": {"pending": pending, "failedOrBounced": failed, "maxPending": max_pending, "maxFailedOrBounced": max_failed},
+        "storage": {"usedPercent": storage_percent, "maxUsedPercent": max_storage_percent},
+        "backup": {"available": bool(backup_files), "ageHours": backup_age_hours, "maxAgeHours": max_backup_age_hours},
+        "checkedAt": now_ms(),
+    }), 200 if ok else 503
 
 
 @app.route("/uploads/<path:filename>", methods=["GET"])

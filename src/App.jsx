@@ -30,6 +30,7 @@ import SalaryHistory from '@/pages/SalaryHistoryPage';
 import PayslipPdfPage from '@/pages/PayslipPreviewPage';
 import UserManagement from '@/pages/UserManagement';
 import { AppLoadingState, OfflineBanner, PageState, SystemStateBoundary } from '@/components/SystemStateBoundary';
+import PwaInstallPrompt from '@/components/PwaInstallPrompt';
 
 const RequirePermission = ({ permission, children }) => {
   const { can, firstAllowedPath } = useAuth();
@@ -72,5 +73,5 @@ function AuthenticatedApp() {
 }
 
 export default function App() {
-  return <SystemStateBoundary><AuthProvider><ThemeProvider><QueryClientProvider client={queryClientInstance}><Router><ScrollToTop /><OfflineBanner /><AuthenticatedApp /></Router><Toaster /></QueryClientProvider></ThemeProvider></AuthProvider></SystemStateBoundary>;
+  return <SystemStateBoundary><AuthProvider><ThemeProvider><QueryClientProvider client={queryClientInstance}><Router><ScrollToTop /><OfflineBanner /><AuthenticatedApp /><PwaInstallPrompt /></Router><Toaster /></QueryClientProvider></ThemeProvider></AuthProvider></SystemStateBoundary>;
 }

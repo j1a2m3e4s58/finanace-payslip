@@ -172,6 +172,11 @@ test('staff to payroll approval, PDF, private bulk email, and correction workflo
   await expect(page.getByRole('heading', { name: /payslip pdf preview/i })).toBeVisible();
   await page.getByRole('button', { name: /preview selected/i }).click();
   await expect(page.locator('iframe[title^="Payslip preview"]')).toBeVisible();
+  await page.getByRole('button', { name: /full-screen preview/i }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.locator('iframe[title^="Full-screen payslip preview"]')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toBeHidden();
   await expect(page.getByRole('link', { name: /full[- ]screen/i })).toBeVisible();
 
   const testEmail = await api(page, `/payroll-batches/${batchId}/email-test`, {

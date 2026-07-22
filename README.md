@@ -85,6 +85,15 @@ The included `render.yaml` creates a Docker web service, a dedicated background 
 
 Install and update the malware scanner used by `MALWARE_SCANNER_COMMAND` (the supplied container installs ClamAV). Production uploads fail closed when the configured scanner is unavailable. Schedule signature updates on the host or rebuild the container regularly.
 
+### Install on a phone
+
+The deployed HTTPS site is an installable Progressive Web App named **BCB Payslips** and uses the official BCB finance emblem. The install option is intentionally shown on the public authentication screens only.
+
+- Android (Chrome/Edge): open the Render HTTPS URL, tap **Install Finance App**, then confirm **Install**. The browser menu's **Install app** or **Add to Home screen** option is also supported.
+- iPhone/iPad (Safari): open the Render HTTPS URL, tap **Share**, choose **Add to Home Screen**, then tap **Add**.
+
+The installed application still requires the secured server and an internet connection for confidential work. Its service worker caches only the public application shell and offline message; API responses, staff records, payroll data, payslips, exports, uploads, and profile pictures are never stored for offline use.
+
 ## Backups and recovery
 
 Encrypted backups run according to the Portal Control schedule and are written to `BACKUP_DIR`. Retention is controlled by `BACKUP_RETENTION_COUNT`. Interactive export and restore remain disabled by default because backups contain confidential bank records; enable `ALLOW_BOSS_ADMIN_DATABASE_MAINTENANCE=true` only for a separately approved maintenance window. Keep a copy of `BACKUP_ENCRYPTION_KEY` in the bank's approved secrets vault and test restoration in staging every quarter.
@@ -94,10 +103,20 @@ Branding, branches, departments, statutory contribution rates, validation thresh
 ## Operations and monitoring
 
 - Monitor `/api/health` for database, pending-queue, and worker-heartbeat health. A Super Admin can inspect the non-sensitive count snapshot at `/api/metrics`.
+- Configure a separate `MONITORING_TOKEN` on the Render web and worker services and matching `PRODUCTION_BASE_URL`/`PRODUCTION_MONITORING_TOKEN` secrets in the GitHub `production` environment. The scheduled **Production Monitoring** workflow checks the protected `/api/monitoring/status` feed every 15 minutes and opens or resolves a restricted repository issue without including payroll or recipient data.
 - Alert when the health endpoint fails, pending deliveries grow continuously, or `Failed`/`Bounced` email counts rise.
 - Rotate SMTP, webhook, encryption, and backup secrets according to bank policy. Rotation of encryption keys must include a tested data re-encryption or restore plan.
 - Test SMTP outage recovery, duplicate-send prevention, provider bounce webhooks, password reset email delivery, and backup restoration in staging before each production release.
 - Forward container logs to restricted centralized storage and retain them according to the bank's security policy. Request IDs are returned in `X-Request-ID` and timing is exposed through `Server-Timing` for incident tracing.
+
+## Acceptance, policy and training pack
+
+- [Security review and penetration-test gate](docs/SECURITY_REVIEW_AND_PENTEST.md)
+- [Bank user-acceptance testing and sign-off](docs/BANK_UAT_ACCEPTANCE.md)
+- [Device, browser, PDF and connectivity acceptance](docs/DEVICE_AND_CONNECTIVITY_ACCEPTANCE.md)
+- [Production monitoring and alert-response runbook](docs/PRODUCTION_MONITORING_RUNBOOK.md)
+- [Bank security, privacy and operational policies](docs/BANK_SECURITY_AND_DATA_POLICIES.md)
+- [Operations, recovery and training manual](docs/OPERATIONS_RECOVERY_AND_TRAINING.md)
 
 ## Pilot checklist
 

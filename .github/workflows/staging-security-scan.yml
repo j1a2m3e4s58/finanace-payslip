@@ -3,24 +3,26 @@ name: Approved Staging Security Scan
 on:
   workflow_dispatch:
     inputs:
-      target_url:
-        description: Approved HTTPS staging URL; never enter the production payroll URL
+      confirmation:
+        description: Type SCAN STAGING to authorize the protected staging target
         required: true
-        type: string
 
 permissions:
   contents: read
   issues: write
 
 jobs:
-  validate-target:
+  zap-baseline:
     runs-on: ubuntu-latest
-    outputs:
-      approved: ${{ steps.target.outputs.approved }}
+    environment: staging
+    timeout-minutes: 15
     steps:
-      - id: target
+      - name: Verify explicit staging authorization
+        if: ${{ inputs.confirmation != 'SCAN STAGING' }}
+        run: exit 1
+      - name: Validate the protected staging target
         env:
-          TARGET_URL: ${{ inputs.target_url }}
+          TARGET_URL: ${{ secrets.STAGING_BASE_URL }}
         run: |
           python - <<'PY'
           import os
@@ -29,21 +31,11 @@ jobs:
           parsed = urlparse(url)
           if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
               raise SystemExit('Only an approved HTTPS staging URL without embedded credentials is allowed')
-          if not any(marker in parsed.hostname.lower() for marker in ('staging', 'test', 'onrender.com')):
-              raise SystemExit('Target host must clearly identify a staging/test environment')
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-              output.write('approved=true\n')
           PY
-
-  zap-baseline:
-    needs: validate-target
-    if: needs.validate-target.outputs.approved == 'true'
-    runs-on: ubuntu-latest
-    steps:
       - uses: actions/checkout@v4
       - uses: zaproxy/action-baseline@v0.14.0
         with:
-          target: ${{ inputs.target_url }}
+          target: ${{ secrets.STAGING_BASE_URL }}
           fail_action: true
           allow_issue_writing: true
           artifact_name: zap-staging-report

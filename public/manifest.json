@@ -1,0 +1,57 @@
+{
+  "id": "/",
+  "name": "Bawjiase Community Bank Finance Payslip Platform",
+  "short_name": "BCB Payslips",
+  "description": "Secure finance payroll, payslip approval, PDF generation and private staff delivery for Bawjiase Community Bank.",
+  "start_url": "/login?source=installed-app",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#f8faf7",
+  "theme_color": "#064e3b",
+  "categories": ["finance", "business", "productivity"],
+  "lang": "en-GH",
+  "dir": "ltr",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/icons/bcb-finance-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/bcb-finance-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/bcb-finance-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Finance Dashboard",
+      "short_name": "Dashboard",
+      "url": "/",
+      "icons": [{ "src": "/icons/bcb-finance-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Staff Directory",
+      "short_name": "Staff",
+      "url": "/staff",
+      "icons": [{ "src": "/icons/bcb-finance-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Payslip Preview",
+      "short_name": "Payslips",
+      "url": "/payslips/preview",
+      "icons": [{ "src": "/icons/bcb-finance-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

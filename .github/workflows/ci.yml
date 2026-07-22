@@ -31,13 +31,18 @@ jobs:
         run: npm run typecheck
 
       - name: Frontend dependency security audit
-        run: npm audit --audit-level=moderate
+        run: npm audit --audit-level=low
 
       - name: Build frontend
         run: npm run build
 
       - name: Install backend dependencies
-        run: python -m pip install -r mail-api/requirements.txt
+        run: python -m pip install -r mail-api/requirements-dev.txt
+
+      - name: Backend dependency security audit
+        run: |
+          python -m pip_audit -r mail-api/requirements.txt
+          python -m pip_audit -r mail-api/requirements-dev.txt
 
       - name: Backend tests
         run: python -m pytest mail-api/tests -q
@@ -46,7 +51,7 @@ jobs:
         run: npm run test:load
 
       - name: Python syntax
-        run: python -m py_compile mail-api/app.py mail-api/storage.py mail-api/worker.py mail-api/wsgi.py mail-api/predeploy.py mail-api/production_config.py scripts/run-e2e-api.py scripts/run-e2e-smtp.py scripts/load-test.py scripts/postgres-recovery-drill.py scripts/check-production-config.py scripts/staging-smoke.py scripts/staging-payroll-delivery.py
+        run: python -m py_compile mail-api/app.py mail-api/storage.py mail-api/worker.py mail-api/wsgi.py mail-api/predeploy.py mail-api/production_config.py scripts/run-e2e-api.py scripts/run-e2e-smtp.py scripts/load-test.py scripts/postgres-recovery-drill.py scripts/check-production-config.py scripts/staging-smoke.py scripts/staging-payroll-delivery.py scripts/production-monitor.py
 
   production-services:
     runs-on: ubuntu-latest
@@ -69,7 +74,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install -r mail-api/requirements.txt
+      - run: python -m pip install -r mail-api/requirements-dev.txt
       - name: PostgreSQL and private SMTP integration gates
         env:
           TEST_POSTGRES_DATABASE_URL: postgresql+psycopg://bcb_test:bcb-test-password@127.0.0.1:5432/bcb_payslip_test
@@ -97,7 +102,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm ci
-      - run: python -m pip install -r mail-api/requirements.txt
+      - run: python -m pip install -r mail-api/requirements-dev.txt
       - run: npx playwright install --with-deps chromium
       - name: Full payroll browser workflow
         run: npm run test:e2e

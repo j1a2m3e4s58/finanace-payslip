@@ -7,6 +7,7 @@ Complete this gate in a separate staging environment before entering real salary
 - Deploy both `bawjiase-payslip-platform` and `bawjiase-payslip-worker` from `render.yaml`.
 - The web service runs `python predeploy.py` before release. Deployment is blocked unless production configuration is safe, PostgreSQL is reachable, and schema migrations succeed.
 - Render checks `/api/readiness`, which requires PostgreSQL plus a recent external-worker heartbeat. `/api/health` remains the lower-level diagnostic endpoint.
+- Confirm `/manifest.json`, `/sw.js`, `/offline.html`, and all `/icons/bcb-finance-*.png` files return HTTP 200 over the final Render HTTPS domain. Install the app on one managed Android phone and one managed iPhone, then verify the BCB icon, standalone launch, logout, session timeout, update behavior, and offline warning.
 - Set independent Fernet values for `DATA_ENCRYPTION_KEY`, `MFA_ENCRYPTION_KEY`, and `BACKUP_ENCRYPTION_KEY`.
 - Give the web and worker the same data-encryption key and SMTP values.
 - Set `MAIL_DEFAULT_SENDER`, `PASSWORD_RESET_BASE_URL`, `ALLOWED_ORIGINS`, and a long random `DELIVERY_WEBHOOK_SECRET`.
@@ -38,6 +39,7 @@ Complete this gate in a separate staging environment before entering real salary
 - Review weekly CodeQL findings and manually run **Approved Staging Security Scan** against the approved HTTPS staging deployment; resolve the OWASP ZAP report before real salaries are introduced.
 - Run `python scripts/postgres-recovery-drill.py` with `TEST_POSTGRES_DATABASE_URL` pointing only to an approved test/staging database. The drill creates and removes a disposable restore database and compares SHA-256 content hashes without printing records.
 - Forward JSON `api_request`, `payslip_delivery_failed`, and `payslip_delivery_bounced` events to restricted monitoring and alert on repeated failures.
+- Configure `MONITORING_TOKEN` in Render and `PRODUCTION_BASE_URL` plus `PRODUCTION_MONITORING_TOKEN` in the protected GitHub `production` environment. Run **Production Monitoring** manually once, then confirm its 15-minute schedule can open and close the scoped operational alert issue.
 
 ## Device acceptance
 

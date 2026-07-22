@@ -29,6 +29,7 @@ def set_ready_environment(monkeypatch):
         "MAIL_PASSWORD": "synthetic-password",
         "MAIL_DEFAULT_SENDER": "finance@example.invalid",
         "DELIVERY_WEBHOOK_SECRET": "synthetic-webhook-secret-at-least-32-characters",
+        "MONITORING_TOKEN": "synthetic-monitoring-token-at-least-32-characters",
         "PASSWORD_RESET_BASE_URL": "https://staging.example.invalid/reset-password",
         "ALLOWED_ORIGINS": "https://staging.example.invalid",
     }
@@ -78,11 +79,13 @@ def test_production_configuration_rejects_unsafe_mail_and_access_controls(monkey
     monkeypatch.setenv("MAIL_SECURITY", "none")
     monkeypatch.setenv("MAIL_PORT", "invalid")
     monkeypatch.setenv("MAX_LOGIN_ATTEMPTS", "20")
+    monkeypatch.setenv("MONITORING_MAX_STORAGE_PERCENT", "100")
     failures = config.validate_production_config()
     assert any("maker_checker" in item.lower() for item in failures)
     assert any("mail_security" in item.lower() for item in failures)
     assert any("mail_port" in item.lower() for item in failures)
     assert any("max_login_attempts" in item.lower() for item in failures)
+    assert any("monitoring_max_storage_percent" in item.lower() for item in failures)
 
 
 def test_render_blueprint_keeps_public_registration_disabled():
@@ -176,3 +179,29 @@ def test_health_reports_offline_when_database_is_unavailable(monkeypatch):
         response, status = portal.health()
     assert status == 503
     assert response.get_json()["status"] == "offline"
+
+
+def test_monitoring_status_requires_a_dedicated_token(monkeypatch):
+    monkeypatch.setenv("MONITORING_TOKEN", "monitoring-secret-that-is-long-enough")
+    with portal.app.test_request_context("/api/monitoring/status"):
+        response, status = portal.monitoring_status()
+    assert status == 401
+    assert "authentication" in response.get_json()["error"].lower()
+
+
+def test_monitoring_status_reports_operational_dependencies(tmp_path, monkeypatch):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    (backup_dir / "latest.bcbbackup").write_bytes(b"encrypted-synthetic-backup")
+    monkeypatch.setenv("MONITORING_TOKEN", "monitoring-secret-that-is-long-enough")
+    monkeypatch.setenv("BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(portal.DATABASE_STORE, "health", lambda: {"ok": True, "backend": "postgresql"})
+    monkeypatch.setattr(portal, "payslip_worker_status", lambda: {"healthy": True, "mode": "external"})
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: [])
+    monkeypatch.setattr(portal.shutil, "disk_usage", lambda _path: type("Usage", (), {"used": 10, "total": 100})())
+    with portal.app.test_request_context("/api/monitoring/status", headers={"X-Monitoring-Token": "monitoring-secret-that-is-long-enough"}):
+        response, status = portal.monitoring_status()
+    payload = response.get_json()
+    assert status == 200
+    assert payload["status"] == "operational"
+    assert all(payload["checks"].values())

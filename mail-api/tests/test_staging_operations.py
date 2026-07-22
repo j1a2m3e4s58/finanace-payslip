@@ -44,3 +44,19 @@ def test_approved_staging_workflows_are_manual_and_environment_gated():
         workflow = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
         assert "workflow_dispatch:" in workflow
         assert "environment: staging" in workflow
+
+
+def test_production_monitor_rejects_non_https_before_network(monkeypatch):
+    monitor = load_script("production-monitor.py")
+    monkeypatch.setenv("PRODUCTION_BASE_URL", "http://production.example.invalid")
+    monkeypatch.setenv("PRODUCTION_MONITORING_TOKEN", "synthetic-monitoring-token")
+    with pytest.raises(RuntimeError, match="HTTPS"):
+        monitor.main()
+
+
+def test_production_monitoring_workflow_is_scheduled_and_secret_gated():
+    workflow = (ROOT / ".github" / "workflows" / "production-monitoring.yml").read_text(encoding="utf-8")
+    assert "schedule:" in workflow
+    assert "environment: production" in workflow
+    assert "secrets.PRODUCTION_BASE_URL" in workflow
+    assert "secrets.PRODUCTION_MONITORING_TOKEN" in workflow

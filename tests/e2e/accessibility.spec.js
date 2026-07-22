@@ -39,6 +39,19 @@ async function expectFormControlsAreTouchFriendly(page) {
   }
 }
 
+async function expectCenteredOverlay(page) {
+  const dialog = page.getByRole('dialog').last();
+  await expect(dialog).toBeVisible();
+  const box = await dialog.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(Math.abs((box.x + box.width / 2) - viewport.width / 2), 'dialog is not horizontally centered').toBeLessThanOrEqual(2);
+  expect(Math.abs((box.y + box.height / 2) - viewport.height / 2), 'dialog is not vertically centered').toBeLessThanOrEqual(2);
+  expect(box.width).toBeLessThanOrEqual(viewport.width - 8);
+  expect(box.height).toBeLessThanOrEqual(viewport.height - 8);
+}
+
 test.describe('accessible banking workspace', () => {
   test.setTimeout(240_000);
   test('public sign-in is keyboard and screen-reader ready', async ({ page }) => {
@@ -90,6 +103,22 @@ test.describe('accessible banking workspace', () => {
         await expectNoHorizontalPageOverflow(page);
         if (viewport.width <= 430) await expectFormControlsAreTouchFriendly(page);
       }
+    }
+  });
+
+  test('record overlays stay centered and contained on desktop and phone', async ({ page }) => {
+    await login(page);
+    for (const viewport of [{ width: 1365, height: 768 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      await page.goto('/staff');
+      const trigger = viewport.width < 768
+        ? page.getByRole('button', { name: /view staff details/i }).first()
+        : page.locator('button[aria-label^="View "]').first();
+      await expect(trigger).toBeVisible();
+      await trigger.click();
+      await expectCenteredOverlay(page);
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('dialog')).toBeHidden();
     }
   });
 

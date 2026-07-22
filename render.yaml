@@ -66,6 +66,16 @@ services:
         sync: false
       - key: DELIVERY_WEBHOOK_SECRET
         sync: false
+      - key: MONITORING_TOKEN
+        sync: false
+      - key: MONITORING_MAX_PENDING_DELIVERIES
+        value: "100"
+      - key: MONITORING_MAX_FAILED_DELIVERIES
+        value: "0"
+      - key: MONITORING_MAX_STORAGE_PERCENT
+        value: "85"
+      - key: MONITORING_MAX_BACKUP_AGE_HOURS
+        value: "192"
       - key: PASSWORD_RESET_BASE_URL
         sync: false
       - key: ALLOWED_ORIGINS
@@ -130,6 +140,8 @@ services:
       - key: MAIL_DEFAULT_SENDER
         sync: false
       - key: DELIVERY_WEBHOOK_SECRET
+        sync: false
+      - key: MONITORING_TOKEN
         sync: false
       - key: PASSWORD_RESET_BASE_URL
         sync: false
