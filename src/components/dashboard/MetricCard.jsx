@@ -11,7 +11,7 @@ const colorMap = {
   red: { bg: 'bg-red-500/10', text: 'text-red-500', glow: 'hover:shadow-red-500/20' },
 };
 
-export default function MetricCard({ label, value, icon: Icon, color = 'blue', loading, sublabel, to }) {
+export default function MetricCard({ label, value, icon: Icon, color = 'blue', loading = false, sublabel = '', to = '' }) {
   const c = colorMap[color] || colorMap.blue;
   const content = (
     <div className={`h-full rounded-xl border border-border bg-card p-4 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-lg lg:p-5 ${c.glow}`}>

@@ -72,7 +72,7 @@ export default function Register() {
       <Field label="Password" icon={Lock}><PasswordControl value={form.password} onChange={(value) => update("password", value)} visible={showPassword} toggle={() => setShowPassword((value) => !value)} autoComplete="new-password" /></Field>
       <Field label="Confirm Password" icon={Lock}><PasswordControl value={form.confirmPassword} onChange={(value) => update("confirmPassword", value)} visible={showPassword} toggle={() => setShowPassword((value) => !value)} placeholder="Repeat Password" autoComplete="new-password" /></Field>
       <div className="col-span-full grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg border border-border bg-muted/35 px-2.5 py-2">
-        {rules.map(([label, valid]) => <span key={label} className={`flex items-center gap-1 text-[9px] font-medium ${valid ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{valid ? <CircleCheck className="h-3 w-3" /> : <CircleX className="h-3 w-3" />}{label}</span>)}
+        {rules.map(([label, valid]) => <span key={String(label)} className={`flex items-center gap-1 text-[9px] font-medium ${valid ? "text-emerald-800 dark:text-emerald-300" : "text-red-700 dark:text-red-300"}`}>{valid ? <CircleCheck className="h-3 w-3" /> : <CircleX className="h-3 w-3" />}{label}</span>)}
       </div>
       <Button type="submit" disabled={loading || !validPassword || !form.email || !form.branch || !form.department || form.password !== form.confirmPassword} className="glass-button col-span-full h-10 text-xs font-bold uppercase tracking-[0.18em]">
         {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Submitting…</> : "Create Account"}

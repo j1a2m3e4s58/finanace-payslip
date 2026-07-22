@@ -430,7 +430,7 @@ export default function StaffDirectoryPage() {
             </span>
             <select
               aria-label="Staff per page"
-              className="h-8 rounded-md border border-border bg-background px-2"
+              className="h-11 rounded-md border border-border bg-background px-3"
               value={pageSize}
               onChange={(event) => setPageSize(Number(event.target.value))}
             >
@@ -890,7 +890,7 @@ function Detail({ label, value }) {
     </div>
   );
 }
-function DrawerDetail({ label, value, warning }) {
+function DrawerDetail({ label, value, warning = false }) {
   return (
     <div
       className={`rounded-xl border p-3 ${warning ? "border-amber-500/30 bg-amber-500/[.04]" : "border-border"}`}

@@ -2,6 +2,10 @@ import { clearStoredAuthUser, getCsrfToken } from "@/api/authClient";
 
 const API_ROOT = (import.meta.env.VITE_MAIL_API_URL || "/mail-api/api").replace(/\/$/, "");
 
+/**
+ * @param {string} path
+ * @param {{method?: string, body?: unknown}} [options]
+ */
 async function apiRequest(path, { method = "GET", body } = {}) {
   const csrfToken = getCsrfToken();
   const response = await fetch(`${API_ROOT}${path}`, {

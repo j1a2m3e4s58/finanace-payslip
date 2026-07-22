@@ -19,7 +19,7 @@ export default function ResponsiveSheet({
   description,
   children,
   className = '',
-  returnFocusRef,
+  returnFocusRef = null,
 }) {
   const wasOpen = React.useRef(false);
   React.useEffect(() => {

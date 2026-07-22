@@ -9,8 +9,8 @@ export default function ConfirmActionDialog({
   cancelLabel = 'Cancel',
   tone = 'warning',
   value = '',
-  onValueChange,
-  inputLabel,
+  onValueChange = undefined,
+  inputLabel = '',
   inputType = 'text',
   inputPlaceholder = '',
   required = false,
@@ -18,7 +18,7 @@ export default function ConfirmActionDialog({
   busy = false,
   onConfirm,
   onClose,
-  children,
+  children = null,
 }) {
   const titleId = useId();
   const descriptionId = useId();

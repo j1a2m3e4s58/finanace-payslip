@@ -15,6 +15,7 @@ async function request(path, payload) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401 && path !== '/auth/login') clearStoredAuthUser();
+    /** @type {Error & {status?: number, mfaRequired?: boolean}} */
     const error = new Error(data.error || "Request failed");
     error.status = response.status;
     error.mfaRequired = Boolean(data.mfaRequired);

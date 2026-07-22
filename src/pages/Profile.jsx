@@ -263,11 +263,11 @@ export default function Profile() {
     <div className="mx-auto max-w-5xl space-y-6 pb-20 lg:pb-0">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-blue-500">
+          <p className="text-xs font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
             Personal workspace
           </p>
           <h1 className="mt-1 flex items-center gap-2 font-heading text-2xl font-bold text-foreground lg:text-3xl">
-            <UserCircle className="h-7 w-7 text-blue-500" />
+            <UserCircle className="h-7 w-7 text-blue-700 dark:text-blue-300" />
             My Profile
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">

@@ -14,7 +14,8 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function parseStaffFile(file) {
   const isCsv = file.name.toLowerCase().endsWith('.csv');
-  const matrix = isCsv ? parseCsv(await file.text()) : await readXlsxFile(file);
+  const rawMatrix = isCsv ? parseCsv(await file.text()) : await readXlsxFile(file);
+  const matrix = /** @type {Array<Array<unknown>>} */ (/** @type {unknown} */ (rawMatrix));
   const headers = (matrix[0] || []).map((header) => clean(header));
   return matrix.slice(1).filter((values) => values.some((value) => clean(value))).map((values, index) => {
     const result = { rowNumber: index + 2 };

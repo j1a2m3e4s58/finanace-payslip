@@ -24,7 +24,7 @@ export default function Dashboard() {
   const { can } = useAuth();
   const isMobile = useIsMobile();
   const chartHeight = isMobile ? 210 : 270;
-  const [data, setData] = useState({ metrics: {}, charts: {}, recentBatches: [], warnings: [] });
+  const [data, setData] = useState({ metrics: {}, charts: {}, recentBatches: [], warnings: [], refreshedAt: '' });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const load = useCallback(async () => {

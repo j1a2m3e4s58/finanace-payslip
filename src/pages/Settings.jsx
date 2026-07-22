@@ -6,6 +6,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/ui/use-toast';
 import ConfirmActionDialog from '@/components/ui/confirm-action-dialog';
 
+/** @type {Array<[string, string, React.ComponentType<any>]>} */
 const TABS = [
   ['branding','Branding',Building2], ['organization','Organization',Landmark], ['payroll','Payroll',ServerCog], ['email','Email',Mail],
   ['security','Security',Shield], ['pdf','PDF',Image], ['backup','Backup',DatabaseBackup],
@@ -107,7 +108,7 @@ function NumberField({ label,value,change }) { return <Field label={label}><inpu
 function RateField({ label,value,onChange }) { return <Field label={label}><input className={input} type="number" min="0" max="100" step="0.01" value={value} onChange={(event) => onChange(Number(event.target.value))} /></Field>; }
 function MoneyField({ label,value,onChange }) { return <Field label={label}><div className="relative"><span className="absolute left-3 top-[18px] text-xs font-bold text-muted-foreground">GH₵</span><input className={`${input} pl-11`} type="number" min="1" max="100000000" step="100" value={value} onChange={(event) => onChange(Number(event.target.value))} /></div></Field>; }
 function ListEditor({ label,values = [],onChange }) { return <Field label={label}><textarea className={`${areas} min-h-52`} value={values.join('\n')} onChange={(event) => onChange(event.target.value.split(/\r?\n/))} /></Field>; }
-function Policy({ label,note,checked,onChange }) { return <div className="flex items-center justify-between gap-4 rounded-lg bg-muted/40 p-3"><div><p className="text-sm font-semibold">{label}</p>{note && <p className="text-xs text-muted-foreground">{note}</p>}</div><Switch checked={Boolean(checked)} onCheckedChange={onChange} /></div>; }
+function Policy({ label,note = '',checked,onChange }) { return <div className="flex items-center justify-between gap-4 rounded-lg bg-muted/40 p-3"><div><p className="text-sm font-semibold">{label}</p>{note && <p className="text-xs text-muted-foreground">{note}</p>}</div><Switch checked={Boolean(checked)} onCheckedChange={onChange} /></div>; }
 function LabelEditor({ title,values = {},onChange }) { return <div className="mt-4"><p className="text-xs font-bold uppercase text-muted-foreground">{title}</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{Object.entries(values).map(([key,value]) => <label key={key} className="text-[10px] text-muted-foreground">{key}<input className="mt-1 h-9 w-full rounded-lg border border-border bg-background px-3 text-xs text-foreground" value={value} onChange={(event) => onChange(key,event.target.value)} /></label>)}</div></div>; }
 function UploadBox({ label,current,busy,onFile }) { return <label className="mt-3 flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-border p-3 text-sm"><Upload className="h-4 w-4 text-primary" /><span className="min-w-0"><b>{busy ? 'Uploading…' : label}</b><small className="block truncate text-muted-foreground">{current || 'PNG, JPG or WebP'}</small></span><input className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => onFile(event.target.files?.[0])} /></label>; }
 function Banner({ children }) { return <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700">{children}</div>; }
