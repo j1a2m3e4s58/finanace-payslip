@@ -18,10 +18,13 @@ def set_ready_environment(monkeypatch):
         "FORCE_HTTPS": "true",
         "REQUIRE_POSTGRESQL": "true",
         "REQUIRE_MALWARE_SCANNER": "true",
+        "ENFORCE_MAKER_CHECKER": "true",
         "ALLOW_SELF_REGISTRATION": "false",
         "PAYSLIP_WORKER_MODE": "external",
         "MALWARE_SCANNER_COMMAND": "/usr/bin/clamscan",
         "MAIL_SERVER": "smtp.example.invalid",
+        "MAIL_PORT": "587",
+        "MAIL_SECURITY": "starttls",
         "MAIL_USERNAME": "synthetic-user",
         "MAIL_PASSWORD": "synthetic-password",
         "MAIL_DEFAULT_SENDER": "finance@example.invalid",
@@ -58,6 +61,28 @@ def test_production_configuration_requires_independent_encryption_keys(monkeypat
     monkeypatch.setenv("MFA_ENCRYPTION_KEY", shared)
     failures = config.validate_production_config()
     assert any("independent" in item.lower() for item in failures)
+
+
+def test_production_secret_can_be_loaded_from_mounted_file(tmp_path, monkeypatch):
+    secret_file = tmp_path / "mail-password"
+    secret_file.write_text("mounted-provider-secret\n", encoding="utf-8")
+    monkeypatch.delenv("MAIL_PASSWORD", raising=False)
+    monkeypatch.setenv("MAIL_PASSWORD_FILE", str(secret_file))
+    assert config.configured("MAIL_PASSWORD") is True
+    assert config.secret_value("MAIL_PASSWORD") == "mounted-provider-secret"
+
+
+def test_production_configuration_rejects_unsafe_mail_and_access_controls(monkeypatch):
+    set_ready_environment(monkeypatch)
+    monkeypatch.setenv("ENFORCE_MAKER_CHECKER", "false")
+    monkeypatch.setenv("MAIL_SECURITY", "none")
+    monkeypatch.setenv("MAIL_PORT", "invalid")
+    monkeypatch.setenv("MAX_LOGIN_ATTEMPTS", "20")
+    failures = config.validate_production_config()
+    assert any("maker_checker" in item.lower() for item in failures)
+    assert any("mail_security" in item.lower() for item in failures)
+    assert any("mail_port" in item.lower() for item in failures)
+    assert any("max_login_attempts" in item.lower() for item in failures)
 
 
 def test_render_blueprint_keeps_public_registration_disabled():
@@ -111,3 +136,43 @@ def test_readiness_fails_closed_when_worker_is_unavailable(monkeypatch):
         response, status = portal.readiness()
     assert status == 503
     assert response.get_json()["worker"] == {"ok": False, "mode": "external"}
+
+
+def test_health_reports_online_only_when_database_and_worker_are_ready(monkeypatch):
+    monkeypatch.setattr(portal.DATABASE_STORE, "health", lambda: {"ok": True, "backend": "postgresql"})
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: [])
+    monkeypatch.setattr(portal, "payslip_worker_status", lambda: {"healthy": True, "mode": "external", "lastHeartbeat": 1})
+    monkeypatch.setattr(portal, "start_payslip_worker", lambda: None)
+    monkeypatch.setenv("PAYSLIP_WORKER_MODE", "external")
+    with portal.app.test_request_context("/api/health"):
+        response, status = portal.health()
+    payload = response.get_json()
+    assert status == 200
+    assert payload["status"] == "online"
+    assert payload["deliveryQueue"]["workerReady"] is True
+
+
+def test_health_reports_degraded_when_delivery_worker_is_unavailable(monkeypatch):
+    monkeypatch.setattr(portal.DATABASE_STORE, "health", lambda: {"ok": True, "backend": "postgresql"})
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: [{"status": "Pending"}])
+    monkeypatch.setattr(portal, "payslip_worker_status", lambda: {"healthy": False, "mode": "external", "lastHeartbeat": 0})
+    monkeypatch.setattr(portal, "start_payslip_worker", lambda: None)
+    monkeypatch.setenv("PAYSLIP_WORKER_MODE", "external")
+    with portal.app.test_request_context("/api/health"):
+        response, status = portal.health()
+    payload = response.get_json()
+    assert status == 200
+    assert payload["status"] == "degraded"
+    assert payload["deliveryQueue"]["pending"] == 1
+
+
+def test_health_reports_offline_when_database_is_unavailable(monkeypatch):
+    monkeypatch.setattr(portal.DATABASE_STORE, "health", lambda: {"ok": False, "backend": "postgresql"})
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: [])
+    monkeypatch.setattr(portal, "payslip_worker_status", lambda: {"healthy": True, "mode": "external", "lastHeartbeat": 1})
+    monkeypatch.setattr(portal, "start_payslip_worker", lambda: None)
+    monkeypatch.setenv("PAYSLIP_WORKER_MODE", "external")
+    with portal.app.test_request_context("/api/health"):
+        response, status = portal.health()
+    assert status == 503
+    assert response.get_json()["status"] == "offline"

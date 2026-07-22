@@ -2,6 +2,7 @@ import time
 from io import BytesIO
 
 import pytest
+from cryptography.fernet import Fernet
 from werkzeug.datastructures import FileStorage
 
 import app as portal
@@ -115,6 +116,57 @@ def test_recovery_code_is_single_use(monkeypatch):
     monkeypatch.setattr(portal, "save_mfa_store", lambda updated: store.update(updated))
     assert portal.verify_user_mfa("u1", code) is True
     assert portal.verify_user_mfa("u1", code) is False
+
+
+def test_mfa_enrollment_encrypts_secret_and_issues_recovery_codes(monkeypatch):
+    user = {"id": "u-mfa", "email": "mfa.user@bawjiasecommunitybank.com", "role": "FinanceOfficer"}
+    store = {}
+    monkeypatch.setenv("MFA_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", user, None))
+    monkeypatch.setattr(portal, "load_mfa_store", lambda: store)
+    monkeypatch.setattr(portal, "save_mfa_store", lambda updated: store.update(updated))
+    monkeypatch.setattr(portal, "record_audit_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(portal, "load_portal_settings_store", lambda: {"shortBankName": "BCB"})
+    with portal.app.test_request_context("/api/auth/mfa/enroll", method="POST"):
+        enrollment = portal.auth_mfa_enroll().get_json()
+    assert enrollment["secret"] not in store[user["id"]]["secret"]
+    code = portal.pyotp.TOTP(enrollment["secret"]).now()
+    with portal.app.test_request_context("/api/auth/mfa/confirm", method="POST", json={"code": code}):
+        confirmation = portal.auth_mfa_confirm().get_json()
+    assert confirmation["enabled"] is True
+    assert len(confirmation["recoveryCodes"]) == 8
+    assert portal.user_mfa_enabled(user["id"]) is True
+
+
+def test_admin_mfa_reset_revokes_sessions_and_records_audit(monkeypatch):
+    admin = {"id": "admin-1", "role": "SuperAdmin", "fullname": "Security Admin"}
+    target = {"id": "user-1", "email": "user@bawjiasecommunitybank.com", "role": "FinanceOfficer", "fullname": "Finance User"}
+    store = {target["id"]: {"enabled": True, "secret": "encrypted"}}
+    revoked = []
+    audited = []
+    monkeypatch.setattr(portal, "require_staff_manager", lambda: ("token", admin, None))
+    monkeypatch.setattr(portal, "load_user_store", lambda: [target])
+    monkeypatch.setattr(portal, "load_mfa_store", lambda: store)
+    monkeypatch.setattr(portal, "save_mfa_store", lambda updated: store.update(updated))
+    monkeypatch.setattr(portal, "revoke_user_sessions", lambda user_id: revoked.append(user_id))
+    monkeypatch.setattr(portal, "record_audit_log", lambda actor, action, payload: audited.append((actor, action, payload)))
+    with portal.app.test_request_context(f"/api/users/{target['id']}/reset-mfa", method="POST"):
+        response = portal.admin_reset_user_mfa(target["id"])
+    assert response.get_json()["ok"] is True
+    assert target["id"] not in store
+    assert revoked == [target["id"]]
+    assert audited[0][1] == "ADMIN_MFA_RESET"
+
+
+def test_bank_admin_cannot_reset_isolated_boss_admin_mfa(monkeypatch):
+    admin = {"id": "admin-1", "role": "SuperAdmin", "fullname": "Security Admin"}
+    target = {"id": "boss-1", "email": "boss@bawjiasecommunitybank.com", "role": "BossAdmin", "fullname": "Platform Controller"}
+    monkeypatch.setattr(portal, "require_staff_manager", lambda: ("token", admin, None))
+    monkeypatch.setattr(portal, "load_user_store", lambda: [target])
+    with portal.app.test_request_context(f"/api/users/{target['id']}/reset-mfa", method="POST"):
+        response, status = portal.admin_reset_user_mfa(target["id"])
+    assert status == 403
+    assert "isolated" in response.get_json()["error"].lower()
 
 
 @pytest.mark.parametrize("role", ["FinanceApprover", "Auditor", "Management"])

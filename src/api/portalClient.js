@@ -95,6 +95,10 @@ export async function getPortalSettings() {
   return data.settings;
 }
 
+export async function getSystemHealth() {
+  return apiRequest('/health');
+}
+
 export async function getSystemSettings() {
   const data = await apiRequest('/system-settings');
   return data.settings;

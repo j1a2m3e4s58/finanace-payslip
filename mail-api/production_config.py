@@ -36,6 +36,13 @@ def secret_value(name: str) -> str:
         return ""
 
 
+def integer_setting(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)).strip())
+    except ValueError:
+        return -1
+
+
 def validate_production_config() -> list[str]:
     errors = []
     database_url = os.getenv("DATABASE_URL", "").strip()
@@ -63,6 +70,8 @@ def validate_production_config() -> list[str]:
         errors.append("REQUIRE_POSTGRESQL must be true")
     if not enabled("REQUIRE_MALWARE_SCANNER"):
         errors.append("REQUIRE_MALWARE_SCANNER must be true")
+    if not enabled("ENFORCE_MAKER_CHECKER"):
+        errors.append("ENFORCE_MAKER_CHECKER must be true")
     if enabled("ALLOW_SELF_REGISTRATION"):
         errors.append("ALLOW_SELF_REGISTRATION must remain false unless formally approved")
     if os.getenv("PAYSLIP_WORKER_MODE", "").strip().lower() != "external":
@@ -71,6 +80,16 @@ def validate_production_config() -> list[str]:
         errors.append("MALWARE_SCANNER_COMMAND is required")
     if not all(os.getenv(name, "").strip() for name in ("MAIL_SERVER", "MAIL_USERNAME", "MAIL_DEFAULT_SENDER")):
         errors.append("SMTP server, username, and sender are required")
+    mail_security = os.getenv("MAIL_SECURITY", "").strip().lower()
+    if mail_security not in {"ssl", "starttls"}:
+        errors.append("MAIL_SECURITY must be ssl or starttls")
+    mail_port = integer_setting("MAIL_PORT", 0)
+    if not 1 <= mail_port <= 65535:
+        errors.append("MAIL_PORT must be a valid TCP port")
+    if not 3 <= integer_setting("MAX_LOGIN_ATTEMPTS", 5) <= 10:
+        errors.append("MAX_LOGIN_ATTEMPTS must be between 3 and 10")
+    if not 5 <= integer_setting("ACCOUNT_LOCKOUT_MINUTES", 15) <= 120:
+        errors.append("ACCOUNT_LOCKOUT_MINUTES must be between 5 and 120")
     reset_url = os.getenv("PASSWORD_RESET_BASE_URL", "").strip()
     origins = [item.strip() for item in os.getenv("ALLOWED_ORIGINS", "").split(",") if item.strip()]
     if urlparse(reset_url).scheme != "https":

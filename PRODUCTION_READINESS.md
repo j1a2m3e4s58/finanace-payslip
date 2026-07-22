@@ -16,6 +16,9 @@ Complete this gate in a separate staging environment before entering real salary
 
 ## Delivery verification
 
+- Prepare a payroll named `STAGING ...` or `[STAGING] ...` containing only approved synthetic recipients. Store its ID, exact recipient allowlist, and test recipient in the GitHub `staging` environment secrets.
+- Run **Approved Staging Payslip Delivery** first with 10 recipients and then with 100 or 500 recipients. The workflow refuses unapproved addresses, duplicate recipients, non-staging batch names, missing MFA, and any count mismatch.
+- Use `delivery` mode only when provider webhooks are configured because every record must reach provider-confirmed `Delivered`. Use a separate controlled batch with `bounce-retry` mode to prove Failed/Bounced tracking, retry attempts, and immutable status history.
 - Configure the mail provider or a small provider adapter to POST signed delivery/bounce events to `/api/email-delivery/webhook` with `X-Delivery-Webhook-Secret`. The endpoint accepts one event or an `events` array, maps `delivered`/`delivery` and `bounce`/`bounced`/`dropped`/`blocked`, and can match `deliveryId` or the stored `messageId`.
 - Send a 10-user dummy batch, then a 100–500-user dummy batch using non-production recipients.
 - Confirm no message exposes another staff address and each PDF belongs to its recipient.
@@ -30,6 +33,7 @@ Complete this gate in a separate staging environment before entering real salary
 - Verify account lockout, password reset expiry, inactivity logout, CSRF rejection, and MFA enrollment.
 - Upload a harmless antivirus test file in staging and confirm the upload is blocked.
 - Download an encrypted backup, restore it into staging, and compare staff, payroll, audit, and delivery totals.
+- Configure `STAGING_POSTGRES_DATABASE_URL` with a staging-only database credential that can create a disposable restore database. Run **Approved Staging Recovery Drill**, enter `RESTORE STAGING`, and retain the successful workflow record with the launch evidence.
 - Review response security headers and run an approved vulnerability scan before board acceptance.
 - Review weekly CodeQL findings and manually run **Approved Staging Security Scan** against the approved HTTPS staging deployment; resolve the OWASP ZAP report before real salaries are introduced.
 - Run `python scripts/postgres-recovery-drill.py` with `TEST_POSTGRES_DATABASE_URL` pointing only to an approved test/staging database. The drill creates and removes a disposable restore database and compares SHA-256 content hashes without printing records.
@@ -44,7 +48,15 @@ Complete this gate in a separate staging environment before entering real salary
 ## Approved staging acceptance workflow
 
 1. In the GitHub `staging` environment, configure `STAGING_BASE_URL` with the Render HTTPS URL.
-2. Configure `STAGING_ROLE_CREDENTIALS_JSON` with dedicated synthetic accounts for `SuperAdmin`, `Admin`, `FinanceOfficer`, `FinanceApprover`, `Auditor`, `Management`, and `BossAdmin`. Each entry needs `email` and `password`; add `mfaCode` only when the test account requires it.
+2. Configure `STAGING_ROLE_CREDENTIALS_JSON` with dedicated synthetic accounts for `SuperAdmin`, `Admin`, `FinanceOfficer`, `FinanceApprover`, `Auditor`, `Management`, and `BossAdmin`. Each entry needs `email` and `password`. Privileged roles must also contain the Base32 `mfaSecret`; the workflow generates the short-lived authenticator code at runtime and never prints it.
 3. Run **Approved Staging Acceptance** from GitHub Actions after Render reports both services deployed.
-4. The workflow verifies HTTPS security headers, PostgreSQL, the external worker, disabled registration, invalid-webhook rejection, CSRF enforcement, login/logout, and the role matrix without changing payroll data.
+4. The workflow verifies HTTPS security headers, PostgreSQL, the external worker, completed privileged-role MFA enrollment, disabled registration, invalid-webhook rejection, CSRF enforcement, login/logout, and the role matrix without changing payroll data.
 5. Run **Approved Staging Security Scan** and the PostgreSQL recovery drill separately. Recovery is intentionally restricted to databases whose names include `test`, `staging`, or `drill`.
+
+## MFA enrollment and lost-device acceptance
+
+1. Enroll Super Admin, Admin, Finance Officer, Finance Approver, and Boss Admin from **My Profile → Authenticator security** using separate named staging accounts.
+2. Store each account's recovery codes in the bank-approved password manager; never place recovery codes in source control or ordinary email.
+3. Confirm an authenticator code is required at the next login. The staging acceptance workflow independently verifies all five privileged roles with short-lived codes generated from staging-only secrets.
+4. Test one recovery code on a staging account and confirm the same code cannot be reused.
+5. Test the **Reset MFA** action for a non-BossAdmin staging user, confirm all of that user's sessions are revoked, and require fresh enrollment. Boss Admin remains isolated and must use its own recovery code and profile controls.

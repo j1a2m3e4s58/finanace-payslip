@@ -1,0 +1,35 @@
+name: Approved Staging Recovery Drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type RESTORE STAGING to authorize the disposable restore drill
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bcb-staging-recovery-drill
+  cancel-in-progress: false
+
+jobs:
+  recovery:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Verify explicit staging authorization
+        if: ${{ inputs.confirmation != 'RESTORE STAGING' }}
+        run: |
+          echo "The staging recovery confirmation did not match."
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r mail-api/requirements.txt
+      - name: Run encrypted PostgreSQL backup and restore drill
+        env:
+          TEST_POSTGRES_DATABASE_URL: ${{ secrets.STAGING_POSTGRES_DATABASE_URL }}
+        run: python scripts/postgres-recovery-drill.py

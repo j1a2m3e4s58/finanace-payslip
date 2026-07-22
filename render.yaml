@@ -20,6 +20,8 @@ services:
         value: /var/lib/bcb
       - key: BACKUP_DIR
         value: /var/lib/bcb/backups
+      - key: BACKUP_RETENTION_COUNT
+        value: "12"
       - key: PAYSLIP_WORKER_MODE
         value: external
       - key: MALWARE_SCANNER_COMMAND
@@ -30,6 +32,12 @@ services:
         value: "true"
       - key: ALLOW_SELF_REGISTRATION
         value: "false"
+      - key: ENFORCE_MAKER_CHECKER
+        value: "true"
+      - key: MAX_LOGIN_ATTEMPTS
+        value: "5"
+      - key: ACCOUNT_LOCKOUT_MINUTES
+        value: "15"
       - key: BOSS_ADMIN_EMAIL
         sync: false
       - key: BOSS_ADMIN_NAME
@@ -97,6 +105,12 @@ services:
         value: "true"
       - key: ALLOW_SELF_REGISTRATION
         value: "false"
+      - key: ENFORCE_MAKER_CHECKER
+        value: "true"
+      - key: MAX_LOGIN_ATTEMPTS
+        value: "5"
+      - key: ACCOUNT_LOCKOUT_MINUTES
+        value: "15"
       - key: DATA_ENCRYPTION_KEY
         sync: false
       - key: MFA_ENCRYPTION_KEY

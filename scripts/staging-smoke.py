@@ -11,9 +11,14 @@ printed.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
+import struct
 import sys
+import time
 from http.cookiejar import CookieJar
 from urllib.error import HTTPError
 from urllib.parse import urlparse
@@ -21,6 +26,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 
 ROLES = ("SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover", "Auditor", "Management", "BossAdmin")
+PRIVILEGED_MFA_ROLES = {"SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover", "BossAdmin"}
 ROLE_CHECKS = {
     "SuperAdmin": (("/api/users", 200), ("/api/payroll-batches", 200), ("/api/audit-logs", 200), ("/api/system-settings", 403)),
     "Admin": (("/api/users", 200), ("/api/staff-records?status=all", 200), ("/api/payroll-batches", 403), ("/api/reports?type=payroll_summary&page=1&pageSize=10", 403)),
@@ -56,6 +62,19 @@ def assert_status(actual: int, expected: int, label: str) -> None:
         raise AssertionError(f"{label}: expected HTTP {expected}, received {actual}")
 
 
+def totp_code(secret: str, timestamp: int | None = None) -> str:
+    normalized = "".join(str(secret).strip().upper().split())
+    try:
+        key = base64.b32decode(normalized + "=" * ((8 - len(normalized) % 8) % 8), casefold=True)
+    except (ValueError, TypeError) as exc:
+        raise AssertionError("A staging MFA secret is not valid Base32") from exc
+    counter = int(timestamp if timestamp is not None else time.time()) // 30
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    value = (struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF) % 1_000_000
+    return f"{value:06d}"
+
+
 def main() -> None:
     base_url = os.getenv("STAGING_BASE_URL", "").strip().rstrip("/")
     if urlparse(base_url).scheme != "https":
@@ -67,6 +86,9 @@ def main() -> None:
     missing = [role for role in ROLES if not credentials.get(role, {}).get("email") or not credentials.get(role, {}).get("password")]
     if missing:
         raise SystemExit("Missing staging credentials for: " + ", ".join(missing))
+    missing_mfa = [role for role in PRIVILEGED_MFA_ROLES if not credentials.get(role, {}).get("mfaSecret")]
+    if missing_mfa:
+        raise SystemExit("Missing staging MFA secrets for privileged roles: " + ", ".join(sorted(missing_mfa)))
 
     public = build_opener()
     status, headers, readiness = request(public, f"{base_url}/api/readiness")
@@ -97,11 +119,13 @@ def main() -> None:
         status, _, login = request(opener, f"{base_url}/api/auth/login", method="POST", payload={
             "email": account["email"],
             "passwordHash": account["password"],
-            "mfaCode": account.get("mfaCode", ""),
+            "mfaCode": totp_code(account["mfaSecret"]) if account.get("mfaSecret") else "",
         })
         assert_status(status, 200, f"{role} login")
         if login.get("user", {}).get("role") != role:
             raise AssertionError(f"{role} account returned a different role")
+        if role in PRIVILEGED_MFA_ROLES and login.get("user", {}).get("mfaEnabled") is not True:
+            raise AssertionError(f"{role} has not completed MFA enrollment")
         for route, expected in ROLE_CHECKS[role]:
             status, _, _ = request(opener, f"{base_url}{route}")
             assert_status(status, expected, f"{role} {route}")
@@ -111,7 +135,7 @@ def main() -> None:
         status, _, _ = request(opener, f"{base_url}/api/auth/logout", method="POST", payload={}, headers={"X-CSRF-Token": csrf_token})
         assert_status(status, 200, f"{role} logout")
 
-    print("Staging readiness, security headers, CSRF, registration policy, worker, PostgreSQL, webhook rejection, and role matrix passed")
+    print("Staging readiness, privileged MFA, security headers, CSRF, registration policy, worker, PostgreSQL, webhook rejection, and role matrix passed")
 
 
 if __name__ == "__main__":

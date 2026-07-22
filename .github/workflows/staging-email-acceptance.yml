@@ -1,0 +1,52 @@
+name: Approved Staging Payslip Delivery
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_count:
+        description: Number of explicitly approved synthetic recipients in the staging payroll
+        required: true
+        type: choice
+        options: ['10', '100', '500']
+      mode:
+        description: Verify successful delivery or a controlled failure/bounce and retry
+        required: true
+        type: choice
+        options: [delivery, bounce-retry]
+      confirmation:
+        description: Type SEND SYNTHETIC PAYSLIPS to authorize external email
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bcb-staging-payslip-delivery
+  cancel-in-progress: false
+
+jobs:
+  delivery:
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 20
+    steps:
+      - name: Verify explicit staging authorization
+        if: ${{ inputs.confirmation != 'SEND SYNTHETIC PAYSLIPS' }}
+        run: |
+          echo "The staging email confirmation did not match."
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Send and verify the approved synthetic payroll batch
+        env:
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          STAGING_ROLE_CREDENTIALS_JSON: ${{ secrets.STAGING_ROLE_CREDENTIALS_JSON }}
+          STAGING_EMAIL_BATCH_ID: ${{ secrets.STAGING_EMAIL_BATCH_ID }}
+          STAGING_APPROVED_RECIPIENTS_JSON: ${{ secrets.STAGING_APPROVED_RECIPIENTS_JSON }}
+          STAGING_TEST_RECIPIENT: ${{ secrets.STAGING_TEST_RECIPIENT }}
+          STAGING_EXPECTED_RECIPIENT_COUNT: ${{ inputs.expected_count }}
+          STAGING_DELIVERY_MODE: ${{ inputs.mode }}
+          STAGING_EMAIL_CONFIRMATION: ${{ inputs.confirmation }}
+        run: python scripts/staging-payroll-delivery.py

@@ -6,6 +6,7 @@ import Sidebar, { navItems } from './Sidebar';
 import Header from './Header';
 import { ROLES } from '@/lib/permissions';
 import ResponsiveSheet from '@/components/ui/responsive-sheet';
+import useSystemHealth from '@/hooks/useSystemHealth';
 
 export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -16,6 +17,7 @@ export default function AppLayout() {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreButtonRef = useRef(null);
   const { user, can } = useAuth();
+  const systemHealth = useSystemHealth();
   const location = useLocation();
   const mobileOrder = {
     [ROLES.BOSS_ADMIN]: ['/portal-control', '/profile'],
@@ -37,7 +39,7 @@ export default function AppLayout() {
   }, [sidebarCollapsed]);
   return <div className="flex min-h-screen bg-background">
     <a href="#main-content" className="fixed left-3 top-3 z-[120] -translate-y-24 rounded-lg bg-primary px-4 py-3 font-bold text-primary-foreground shadow-xl transition-transform focus:translate-y-0">Skip to main content</a>
-    <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((current) => !current)} />
+    <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((current) => !current)} systemHealth={systemHealth} />
     <div className="flex min-w-0 flex-1 flex-col transition-[width] duration-300">
       <Header onMenuClick={() => setSidebarOpen(true)} user={user} />
       <main id="main-content" tabIndex={-1} className="flex-1 overflow-x-hidden px-3 pb-24 pt-4 outline-none sm:px-4 lg:p-6"><div className="mx-auto w-full max-w-[1600px]"><Outlet /></div></main>

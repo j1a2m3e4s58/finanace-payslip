@@ -20,11 +20,20 @@ export const navItems = [
   { label: 'My Profile', path: '/profile', icon: UserCircle, group: 'Administration', permission: 'profile.view', desktopHidden: true },
 ];
 
-export default function Sidebar({ isOpen, onClose, collapsed = true, onToggleCollapsed }) {
+const healthPresentation = {
+  checking: { label: 'Checking system status', dot: 'bg-slate-400', panel: 'bg-slate-500/10', text: 'text-muted-foreground' },
+  online: { label: 'Finance system online', dot: 'bg-emerald-500', panel: 'bg-emerald-500/10', text: 'text-emerald-700 dark:text-emerald-400' },
+  degraded: { label: 'Finance system degraded', dot: 'bg-amber-500', panel: 'bg-amber-500/10', text: 'text-amber-800 dark:text-amber-300' },
+  offline: { label: 'Finance system offline', dot: 'bg-red-500', panel: 'bg-red-500/10', text: 'text-red-700 dark:text-red-300' },
+};
+
+export default function Sidebar({ isOpen, onClose, collapsed = true, onToggleCollapsed, systemHealth }) {
   const location = useLocation();
   const { can, portalSettings } = useAuth();
   const visible = navItems.filter((item) => can(item.permission) && !item.desktopHidden);
   const groups = [...new Set(visible.map((item) => item.group))];
+  const health = healthPresentation[systemHealth?.status] || healthPresentation.checking;
+  const healthTitle = `${health.label}${systemHealth?.pending ? ` · ${systemHealth.pending} queued` : ''}`;
   return <>
     {isOpen && <button aria-label="Close navigation" className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden" onClick={onClose} />}
     <aside className={`fixed left-0 top-0 z-50 flex h-screen w-72 flex-col border-r border-sidebar-border bg-sidebar transition-[width,transform] duration-300 lg:sticky ${collapsed ? 'lg:w-[76px]' : 'lg:w-72'} ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
@@ -36,7 +45,7 @@ export default function Sidebar({ isOpen, onClose, collapsed = true, onToggleCol
         <div className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}><h1 className="truncate font-heading text-sm font-bold text-foreground">{portalSettings?.bankName || 'Bawjiase Community Bank'}</h1><p className="text-[11px] font-medium text-muted-foreground">{portalSettings?.portalName || 'Finance Payslip Platform'}</p></div>
       </Link>
       <nav className={`flex-1 overflow-y-auto p-3 ${collapsed ? 'lg:px-2' : ''}`}>{groups.map((group) => <div key={group} className="mb-4"><p className={`mb-1 px-3 text-[9px] font-bold uppercase tracking-[.22em] text-muted-foreground/70 ${collapsed ? 'lg:hidden' : ''}`}>{group}</p><div className="space-y-1">{visible.filter((item) => item.group === group).map((item) => { const Icon = item.icon; const active = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(`${item.path}/`)); return <Link key={item.path} to={item.path} onClick={onClose} title={collapsed ? item.label : undefined} aria-label={collapsed ? item.label : undefined} className={`flex min-h-11 items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${collapsed ? 'lg:justify-center lg:px-2' : ''} ${active ? 'bg-primary text-primary-foreground shadow-md shadow-primary/15' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground'}`}><Icon className="h-4 w-4 shrink-0" /><span className={collapsed ? 'lg:hidden' : ''}>{item.label}</span></Link>; })}</div></div>)}</nav>
-      <div className={`border-t border-sidebar-border p-4 ${collapsed ? 'lg:px-2' : ''}`}><div title={collapsed ? 'Finance system online' : undefined} className={`flex items-center gap-2 rounded-lg bg-emerald-500/10 px-3 py-2 ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}><span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" /><span className={`text-xs font-medium text-emerald-700 dark:text-emerald-400 ${collapsed ? 'lg:hidden' : ''}`}>Finance system online</span></div></div>
+      <div className={`border-t border-sidebar-border p-4 ${collapsed ? 'lg:px-2' : ''}`}><button type="button" onClick={systemHealth?.refresh} title={healthTitle} aria-label={`${healthTitle}. Refresh system status`} className={`flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition hover:brightness-95 ${health.panel} ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}><span className={`h-2.5 w-2.5 shrink-0 rounded-full ${health.dot} ${systemHealth?.status === 'checking' ? 'animate-pulse motion-reduce:animate-none' : ''}`} /><span aria-live="polite" className={`text-xs font-semibold ${health.text} ${collapsed ? 'lg:hidden' : ''}`}>{health.label}</span></button></div>
     </aside>
   </>;
 }

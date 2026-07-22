@@ -46,7 +46,7 @@ jobs:
         run: npm run test:load
 
       - name: Python syntax
-        run: python -m py_compile mail-api/app.py mail-api/storage.py mail-api/worker.py mail-api/wsgi.py mail-api/predeploy.py mail-api/production_config.py scripts/run-e2e-api.py scripts/run-e2e-smtp.py scripts/load-test.py scripts/postgres-recovery-drill.py scripts/check-production-config.py scripts/staging-smoke.py
+        run: python -m py_compile mail-api/app.py mail-api/storage.py mail-api/worker.py mail-api/wsgi.py mail-api/predeploy.py mail-api/production_config.py scripts/run-e2e-api.py scripts/run-e2e-smtp.py scripts/load-test.py scripts/postgres-recovery-drill.py scripts/check-production-config.py scripts/staging-smoke.py scripts/staging-payroll-delivery.py
 
   production-services:
     runs-on: ubuntu-latest

@@ -2057,9 +2057,18 @@ def health():
     database = DATABASE_STORE.health()
     deliveries = load_json_list_store(EMAIL_DELIVERY_STORE_PATH)
     queued = len([item for item in deliveries if item.get("status") in {"Pending", "Sending", "Retried"}])
-    ok = bool(database.get("ok"))
     worker = payslip_worker_status()
-    return jsonify({"ok": ok, "database": database, "deliveryQueue": {"pending": queued, "workerStarted": PAYSLIP_WORKER_STARTED, **worker}}), 200 if ok else 503
+    external_worker_required = str(os.getenv("PAYSLIP_WORKER_MODE", "embedded")).strip().lower() == "external"
+    worker_ready = bool(worker.get("healthy")) if external_worker_required else PAYSLIP_WORKER_STARTED
+    database_ready = bool(database.get("ok"))
+    status = "online" if database_ready and worker_ready else "degraded" if database_ready else "offline"
+    return jsonify({
+        "ok": database_ready,
+        "status": status,
+        "checkedAt": now_ms(),
+        "database": database,
+        "deliveryQueue": {"pending": queued, "workerStarted": PAYSLIP_WORKER_STARTED, "workerReady": worker_ready, **worker},
+    }), 200 if database_ready else 503
 
 
 @app.route("/api/readiness", methods=["GET"])
