@@ -11,6 +11,34 @@ async function login(page) {
   await expect(page).toHaveURL(/\/$/);
 }
 
+async function createOverlayTestStaff(page) {
+  const suffix = Date.now();
+  return page.evaluate(async ({ suffix }) => {
+    const stored = JSON.parse(sessionStorage.getItem('bcb_payslip_auth_user') || '{}');
+    const response = await fetch('/mail-api/api/staff-records', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(stored.csrfToken ? { 'X-CSRF-Token': stored.csrfToken } : {}),
+      },
+      body: JSON.stringify({
+        fullName: 'Accessibility Overlay Test',
+        staffId: `A11Y-${suffix}`,
+        department: 'FINANCE',
+        position: 'Test Officer',
+        branch: 'HEAD OFFICE',
+        phone: '0200000000',
+        email: `a11y.overlay.${suffix}@bawjiasecommunitybank.com`,
+        employmentStatus: 'inactive',
+        reason: 'Automated centered overlay verification',
+      }),
+    });
+    if (!response.ok) throw new Error(`Unable to create overlay fixture (${response.status})`);
+    return response.json();
+  }, { suffix });
+}
+
 async function expectNoSeriousViolations(page) {
   const results = await new AxeBuilder({ page }).analyze();
   const violations = results.violations.filter((item) => ['serious', 'critical'].includes(item.impact));
@@ -42,12 +70,19 @@ async function expectFormControlsAreTouchFriendly(page) {
 async function expectCenteredOverlay(page) {
   const dialog = page.getByRole('dialog').last();
   await expect(dialog).toBeVisible();
+  await expect.poll(async () => {
+    const current = await dialog.boundingBox();
+    const currentViewport = page.viewportSize();
+    if (!current || !currentViewport) return Number.POSITIVE_INFINITY;
+    return Math.max(
+      Math.abs((current.x + current.width / 2) - currentViewport.width / 2),
+      Math.abs((current.y + current.height / 2) - currentViewport.height / 2),
+    );
+  }, { message: 'dialog should settle at the viewport center after its entrance animation' }).toBeLessThanOrEqual(2);
   const box = await dialog.boundingBox();
   const viewport = page.viewportSize();
   expect(box).not.toBeNull();
   expect(viewport).not.toBeNull();
-  expect(Math.abs((box.x + box.width / 2) - viewport.width / 2), 'dialog is not horizontally centered').toBeLessThanOrEqual(2);
-  expect(Math.abs((box.y + box.height / 2) - viewport.height / 2), 'dialog is not vertically centered').toBeLessThanOrEqual(2);
   expect(box.width).toBeLessThanOrEqual(viewport.width - 8);
   expect(box.height).toBeLessThanOrEqual(viewport.height - 8);
 }
@@ -108,6 +143,7 @@ test.describe('accessible banking workspace', () => {
 
   test('record overlays stay centered and contained on desktop and phone', async ({ page }) => {
     await login(page);
+    await createOverlayTestStaff(page);
     for (const viewport of [{ width: 1365, height: 768 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport);
       await page.goto('/staff');
