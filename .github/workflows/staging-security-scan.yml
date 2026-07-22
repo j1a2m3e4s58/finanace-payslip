@@ -33,7 +33,7 @@ jobs:
               raise SystemExit('Only an approved HTTPS staging URL without embedded credentials is allowed')
           PY
       - uses: actions/checkout@v4
-      - uses: zaproxy/action-baseline@v0.14.0
+      - uses: zaproxy/action-baseline@v0.15.0
         with:
           target: ${{ secrets.STAGING_BASE_URL }}
           fail_action: true
