@@ -44,7 +44,6 @@ const Card = ({ children, className = "" }) => (
 );
 const inputClass =
   "h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/25";
-const officialDomain = "@bawjiasecommunitybank.com";
 const pageSizes = [10, 25, 50];
 const columnOptions = [
   ["staffId", "Staff ID"],
@@ -91,6 +90,8 @@ export default function StaffDirectoryPage() {
   const [organization, setOrganization] = useState({
     branches: [],
     departments: [],
+    staffImportColumns: [],
+    emailDomain: "@bawjiasecommunitybank.com",
   });
   const [statusAction, setStatusAction] = useState(null);
 
@@ -107,6 +108,8 @@ export default function StaffDirectoryPage() {
       setOrganization({
         branches: settings.branches || [],
         departments: settings.departments || [],
+        staffImportColumns: (settings.staffImportSchema?.columns || []).filter((column) => column.custom && column.enabled !== false),
+        emailDomain: settings.emailDomain || "@bawjiasecommunitybank.com",
       });
       setSelected((current) =>
         current
@@ -162,7 +165,7 @@ export default function StaffDirectoryPage() {
   );
   const branchCounts = useMemo(() => countBy(records, "branch"), [records]);
   const emailWarningCount = records.filter((person) =>
-    getEmailIssue(person),
+    getEmailIssue(person, organization.emailDomain),
   ).length;
   const changeStatusFilter = (value) => {
     setStatus(value);
@@ -324,6 +327,7 @@ export default function StaffDirectoryPage() {
             <StaffCard
               key={person.id}
               person={person}
+              emailDomain={organization.emailDomain}
               openDetails={openDetails}
             />
           ))}
@@ -347,7 +351,7 @@ export default function StaffDirectoryPage() {
             </thead>
             <tbody>
               {rows.map((person) => {
-                const emailIssue = getEmailIssue(person);
+                const emailIssue = getEmailIssue(person, organization.emailDomain);
                 return (
                   <tr
                     key={person.id}
@@ -619,8 +623,8 @@ function CountSummary({ title, icon: Icon, values, empty }) {
   );
 }
 
-function StaffCard({ person, openDetails }) {
-  const issue = getEmailIssue(person);
+function StaffCard({ person, emailDomain, openDetails }) {
+  const issue = getEmailIssue(person, emailDomain);
   return (
     <article className="min-w-0 overflow-hidden rounded-xl border border-border p-4">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
@@ -670,7 +674,7 @@ function StaffDrawer({
   saveEdit,
   toggleStatus,
 }) {
-  const issue = getEmailIssue(person);
+  const issue = getEmailIssue(person, organization.emailDomain);
   return (
     <ResponsiveSheet
       open
@@ -689,6 +693,7 @@ function StaffDrawer({
               setForm={setForm}
               branches={organization.branches}
               departments={organization.departments}
+              customColumns={organization.staffImportColumns}
             />
             <div className="sticky bottom-0 -mx-5 mt-2 grid grid-cols-2 gap-2 border-t border-border bg-card/95 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] backdrop-blur sm:col-span-2 sm:-mx-6 sm:flex sm:justify-end sm:px-6">
               <SecondaryButton type="button" onClick={cancelEdit}>
@@ -728,6 +733,7 @@ function StaffDrawer({
                 label="Employment status"
                 value={person.employmentStatus}
               />
+              {organization.staffImportColumns.map((column) => <DrawerDetail key={column.key} label={column.label} value={person.customFields?.[column.key]} />)}
             </div>
             <div className="mt-5 grid gap-2 sm:grid-cols-2">
               <Link to={`/salary-history?staff=${person.id}`}>
@@ -763,7 +769,7 @@ function StaffDrawer({
   );
 }
 
-function DrawerStaffFields({ form, setForm, branches, departments }) {
+function DrawerStaffFields({ form, setForm, branches, departments, customColumns = [] }) {
   const update = (key, value) =>
     setForm((current) => ({ ...current, [key]: value }));
   const departmentOptions = includeCurrentOption(
@@ -849,6 +855,14 @@ function DrawerStaffFields({ form, setForm, branches, departments }) {
           <option value="inactive">Inactive</option>
         </select>
       </DrawerField>
+      {customColumns.map((column) => <DrawerField key={column.key} label={column.label}>
+        <input
+          className={inputClass}
+          value={form.customFields?.[column.key] || ""}
+          onChange={(event) => setForm((current) => ({ ...current, customFields: { ...(current.customFields || {}), [column.key]: event.target.value } }))}
+          required={Boolean(column.required)}
+        />
+      </DrawerField>)}
       <DrawerField label="Reason for change" className="sm:col-span-2">
         <textarea
           className="min-h-24 w-full rounded-lg border border-border bg-background p-3 text-sm"
@@ -909,10 +923,11 @@ function EmptyDirectory() {
     </p>
   );
 }
-function getEmailIssue(person) {
+function getEmailIssue(person, configuredDomain = "@bawjiasecommunitybank.com") {
   const email = String(person.email || "")
     .trim()
     .toLowerCase();
+  const officialDomain = String(configuredDomain || "@bawjiasecommunitybank.com").trim().toLowerCase().replace(/^(?!@)/, "@");
   return !email
     ? "Missing email"
     : !email.endsWith(officialDomain)

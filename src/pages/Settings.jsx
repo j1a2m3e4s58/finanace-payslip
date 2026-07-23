@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArchiveRestore, Building2, DatabaseBackup, Download, FileCheck2, Image, Landmark, Mail, Save, Send, ServerCog, Shield, Upload } from 'lucide-react';
+import { ArchiveRestore, ArrowDown, ArrowUp, Building2, DatabaseBackup, Download, FileCheck2, Image, Landmark, Mail, Plus, RotateCcw, Save, Send, ServerCog, Shield, TableProperties, Trash2, Upload } from 'lucide-react';
 import { downloadSecureBackup, getSecurityStatus, getSystemSettings, restoreSecureBackup, testPdfConfiguration, testSmtpConfiguration, updatePortalSettings, uploadBrandingAsset } from '@/api/portalClient';
 import { PageHeader, PrimaryButton, SecondaryButton, StatusBadge } from '@/components/payroll/PageElements';
 import { Switch } from '@/components/ui/switch';
@@ -8,12 +8,13 @@ import ConfirmActionDialog from '@/components/ui/confirm-action-dialog';
 
 /** @type {Array<[string, string, React.ComponentType<any>]>} */
 const TABS = [
-  ['branding','Branding',Building2], ['organization','Organization',Landmark], ['payroll','Payroll',ServerCog], ['email','Email',Mail],
+  ['branding','Branding',Building2], ['organization','Organization',Landmark], ['import','Staff Import',TableProperties], ['payroll','Payroll',ServerCog], ['email','Email',Mail],
   ['security','Security',Shield], ['pdf','PDF',Image], ['backup','Backup',DatabaseBackup],
 ];
 const SECTION_KEYS = {
   branding: ['bankName','shortBankName','bankAddress','bankLogo','authorizedSignature','emailFooter','portalName','loginSubtitle','loginButtonText','authorizedAccessText','allowLightMode','allowDarkMode','defaultTheme'],
   organization: ['emailDomain','branches','departments'],
+  import: ['staffImportSchema'],
   payroll: ['payrollApprovalRequired','inactiveStaffInHistoricalReports','contributionRates','contributionRateEffectiveMonth','payrollValidationRules'],
   email: ['emailProvider','smtpServer','smtpPort','smtpSecurity','smtpUsername','smtpSender','defaultEmailSubject','defaultEmailBody','requireTestEmail'],
   security: ['requirePrivilegedMfa','sessionTimeoutMinutes','passwordResetMinutes','restrictPayslipDownloads'],
@@ -35,13 +36,53 @@ export default function Settings() {
   const [confirmation, setConfirmation] = useState('');
   const [pendingDanger, setPendingDanger] = useState(null);
 
-  const load = async () => { try { const [portal,status] = await Promise.all([getSystemSettings(),getSecurityStatus()]); setSettings(portal); setBaseline(portal); setSecurity(status); setError(''); } catch (err) { setError(err.message); } };
+  const load = async () => { try { const [portal,status] = await Promise.all([getSystemSettings(),getSecurityStatus()]); const normalizedPortal = { ...portal, staffImportSchema: editorImportSchema(portal.staffImportSchema) }; setSettings(normalizedPortal); setBaseline(normalizedPortal); setSecurity(status); setError(''); } catch (err) { setError(err.message); } };
   useEffect(() => { load(); }, []);
   const dirtySections = useMemo(() => settings && baseline ? TABS.map(([key]) => key).filter((section) => SECTION_KEYS[section].some((key) => JSON.stringify(settings[key]) !== JSON.stringify(baseline[key]))) : [], [settings,baseline]);
   useEffect(() => { const warning = (event) => { if (!dirtySections.length) return; event.preventDefault(); event.returnValue = ''; }; window.addEventListener('beforeunload',warning); return () => window.removeEventListener('beforeunload',warning); }, [dirtySections.length]);
   const change = (key,value) => setSettings((current) => ({ ...current, [key]: value }));
   const changeLabel = (group,key,value) => setSettings((current) => ({ ...current, [group]: { ...current[group], [key]: value } }));
   const changeNested = (group,key,value) => setSettings((current) => ({ ...current, [group]: { ...current[group], [key]: value } }));
+  const changeImportColumn = (index, patch) => setSettings((current) => ({
+    ...current,
+    staffImportSchema: {
+      ...current.staffImportSchema,
+      columns: current.staffImportSchema.columns.map((column, columnIndex) => columnIndex === index ? { ...column, ...patch } : column),
+    },
+  }));
+  const moveImportColumn = (index, direction) => setSettings((current) => {
+    const columns = [...current.staffImportSchema.columns];
+    const destination = index + direction;
+    if (destination < 0 || destination >= columns.length) return current;
+    [columns[index], columns[destination]] = [columns[destination], columns[index]];
+    return { ...current, staffImportSchema: { ...current.staffImportSchema, columns } };
+  });
+  const addImportColumn = () => setSettings((current) => {
+    const suffix = `${Date.now()}`.slice(-8);
+    return {
+      ...current,
+      staffImportSchema: {
+        ...current.staffImportSchema,
+        columns: [...current.staffImportSchema.columns, {
+          key: `custom_${suffix}`, label: 'New Column', aliases: [], required: false, enabled: true, custom: true,
+        }],
+      },
+    };
+  });
+  const removeImportColumn = (index) => setSettings((current) => ({
+    ...current,
+    staffImportSchema: {
+      ...current.staffImportSchema,
+      columns: current.staffImportSchema.columns.filter((_, columnIndex) => columnIndex !== index),
+    },
+  }));
+  const resetImportSchema = () => setSettings((current) => ({
+    ...current,
+    staffImportSchema: {
+      ...current.staffImportSchema,
+      columns: defaultImportColumns(),
+    },
+  }));
   const saveSection = async (section) => {
     if (section === 'security' && pendingDanger !== 'security-save') { setPendingDanger('security-save'); return; }
     setPendingDanger(null); setBusy(`save-${section}`);
@@ -49,7 +90,8 @@ export default function Settings() {
     const payload = { ...baseline };
     SECTION_KEYS[section].forEach((key) => { payload[key] = draft[key]; });
     try {
-      const updated = await updatePortalSettings(payload);
+      const response = await updatePortalSettings(payload);
+      const updated = { ...response, staffImportSchema: editorImportSchema(response.staffImportSchema) };
       setBaseline(updated);
       setSettings((current) => { const preserved = { ...updated }; TABS.map(([key]) => key).filter((key) => key !== section).forEach((other) => SECTION_KEYS[other].forEach((key) => { preserved[key] = current[key]; })); return preserved; });
       setError(''); toast.success(`${tabLabel(section)} settings were saved and recorded in the audit trail.`, { title: 'Section saved' });
@@ -84,6 +126,35 @@ export default function Settings() {
 
     {activeTab === 'organization' && <Section title="Organization" note="Lists used by registration, staff records, filters, and new payroll batches."><Field label="Official email domain"><Text value={settings.emailDomain} onChange={(value) => change('emailDomain',value)} /></Field><div className="grid gap-4 lg:grid-cols-2"><ListEditor label="Branches" values={settings.branches} onChange={(value) => change('branches',value)} /><ListEditor label="Departments" values={settings.departments} onChange={(value) => change('departments',value)} /></div><p className="mt-3 text-xs text-muted-foreground">Enter one item per line. Existing historical records keep their original branch and department values.</p><SaveSection name="organization" dirty={tabDirty} busy={busy} save={saveSection} /></Section>}
 
+    {activeTab === 'import' && <Section title="Staff import format" note="Control the headings, accepted alternative names, order, required fields, and extra information used by CSV and Excel staff uploads.">
+      <div className="rounded-xl border border-amber-500/25 bg-amber-500/[.06] p-4 text-sm">
+        <b>Protected identity columns:</b> Staff Name, Staff ID, Official Email, and Employment Status keep stable internal keys so payroll matching, duplicate checks, deactivation, and private email delivery cannot be broken. Their visible titles, aliases, and order can still be changed.
+      </div>
+      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+        <Field label="Maximum upload size (MB)"><input className={input} type="number" min="1" max="20" value={settings.staffImportSchema.maxFileSizeMb} onChange={(event) => change('staffImportSchema',{ ...settings.staffImportSchema, maxFileSizeMb:Number(event.target.value) })} /></Field>
+        <Field label="Maximum records per upload"><input className={input} type="number" min="1" max="5000" value={settings.staffImportSchema.maxRows} onChange={(event) => change('staffImportSchema',{ ...settings.staffImportSchema, maxRows:Number(event.target.value) })} /></Field>
+      </div>
+      <div className="mt-5 space-y-3">
+        {settings.staffImportSchema.columns.map((column,index) => <ImportColumnEditor
+          key={column.key}
+          column={column}
+          index={index}
+          total={settings.staffImportSchema.columns.length}
+          onChange={(patch) => changeImportColumn(index,patch)}
+          onMove={(direction) => moveImportColumn(index,direction)}
+          onRemove={() => removeImportColumn(index)}
+        />)}
+      </div>
+      <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <SecondaryButton onClick={addImportColumn}><Plus className="h-4 w-4" /> Add custom column</SecondaryButton>
+          <SecondaryButton onClick={resetImportSchema}><RotateCcw className="h-4 w-4" /> Restore default columns</SecondaryButton>
+        </div>
+        <SaveSection name="import" dirty={tabDirty} busy={busy} save={saveSection} compact />
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">Removing or disabling an optional column affects future templates only. Values already stored on historical staff records are preserved.</p>
+    </Section>}
+
     {activeTab === 'payroll' && <Section title="Payroll" note="Rates and controls are snapshotted into each new batch; old payroll and sent payslips never change."><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"><RateField label="Employee SSF (%)" value={settings.contributionRates.employeeSsf} onChange={(value) => changeNested('contributionRates','employeeSsf',value)} /><RateField label="Employee ESP (%)" value={settings.contributionRates.employeeEsp} onChange={(value) => changeNested('contributionRates','employeeEsp',value)} /><RateField label="Employee PF (%)" value={settings.contributionRates.employeePf} onChange={(value) => changeNested('contributionRates','employeePf',value)} /><RateField label="Employer SSF (%)" value={settings.contributionRates.employerSsf} onChange={(value) => changeNested('contributionRates','employerSsf',value)} /><RateField label="Employer PF (%)" value={settings.contributionRates.employerPf} onChange={(value) => changeNested('contributionRates','employerPf',value)} /><Field label="Rates effective from"><input className={input} type="month" value={settings.contributionRateEffectiveMonth} onChange={(event) => change('contributionRateEffectiveMonth',event.target.value)} /></Field></div><div className="mt-5 grid gap-4 sm:grid-cols-3"><MoneyField label="Basic salary warning limit" value={settings.payrollValidationRules.maxBasicSalary} onChange={(value) => changeNested('payrollValidationRules','maxBasicSalary',value)} /><MoneyField label="Other amount warning limit" value={settings.payrollValidationRules.maxOtherAmount} onChange={(value) => changeNested('payrollValidationRules','maxOtherAmount',value)} /><RateField label="Deduction warning (%)" value={settings.payrollValidationRules.deductionWarningPercent} onChange={(value) => changeNested('payrollValidationRules','deductionWarningPercent',value)} /></div><div className="mt-5 space-y-3"><Policy label="Require payroll approval" note="Only approved batches can be generated and sent." checked={settings.payrollApprovalRequired} onChange={(value) => change('payrollApprovalRequired',value)} /><Policy label="Show inactive staff in historical reports" note="Inactive staff remain excluded from every new payroll batch." checked={settings.inactiveStaffInHistoricalReports} onChange={(value) => change('inactiveStaffInHistoricalReports',value)} /></div><div className="mt-4 rounded-xl border border-emerald-500/25 bg-emerald-500/[.06] p-4 text-sm"><b>Bank control enforced:</b> approved payroll only. Percentage changes affect only batches for their effective month and later.</div><SaveSection name="payroll" dirty={tabDirty} busy={busy} save={saveSection} /></Section>}
 
     {activeTab === 'email' && <Section title="Email" note="Provider, connection details, template defaults, and test requirements."><div className="grid gap-4 sm:grid-cols-2"><Field label="Provider"><select className={input} value={settings.emailProvider} onChange={(event) => change('emailProvider',event.target.value)}><option value="smtp">SMTP</option><option value="microsoft365">Microsoft 365 SMTP</option><option value="gmail">Gmail SMTP</option><option value="sendgrid">SendGrid SMTP</option><option value="ses">Amazon SES SMTP</option></select></Field><Field label="SMTP security"><select className={input} value={settings.smtpSecurity} onChange={(event) => change('smtpSecurity',event.target.value)}><option value="ssl">SSL</option><option value="starttls">STARTTLS</option></select></Field><Field label="SMTP server"><Text value={settings.smtpServer} onChange={(value) => change('smtpServer',value)} /></Field><Field label="SMTP port"><input className={input} type="number" value={settings.smtpPort} onChange={(event) => change('smtpPort',Number(event.target.value))} /></Field><Field label="SMTP username"><Text value={settings.smtpUsername} onChange={(value) => change('smtpUsername',value)} /></Field><Field label="Sender address"><Text value={settings.smtpSender} onChange={(value) => change('smtpSender',value)} /></Field></div><p className="mt-3 rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">SMTP password: {settings.smtpPasswordConfigured ? 'configured securely on the server' : 'set MAIL_PASSWORD in the server environment'}. It is never stored in the browser.</p><Field label="Default email subject"><Text value={settings.defaultEmailSubject} onChange={(value) => change('defaultEmailSubject',value)} /></Field><Field label="Default email body"><textarea className={`${areas} min-h-40`} value={settings.defaultEmailBody} onChange={(event) => change('defaultEmailBody',event.target.value)} /></Field><Policy label="Require a test email before bulk sending" checked={settings.requireTestEmail} onChange={(value) => change('requireTestEmail',value)} /><div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-between"><SecondaryButton disabled={tabDirty || Boolean(busy)} onClick={testSmtp}><Send className="h-4 w-4" />{busy === 'smtp-test' ? 'Testing…' : 'Test saved SMTP configuration'}</SecondaryButton><SaveSection name="email" dirty={tabDirty} busy={busy} save={saveSection} compact /></div>{tabDirty && <p className="mt-2 text-xs text-amber-700">Save Email settings before testing so the server uses the same values shown here.</p>}</Section>}
@@ -110,6 +181,49 @@ function MoneyField({ label,value,onChange }) { return <Field label={label}><div
 function ListEditor({ label,values = [],onChange }) { return <Field label={label}><textarea className={`${areas} min-h-52`} value={values.join('\n')} onChange={(event) => onChange(event.target.value.split(/\r?\n/))} /></Field>; }
 function Policy({ label,note = '',checked,onChange }) { return <div className="flex items-center justify-between gap-4 rounded-lg bg-muted/40 p-3"><div><p className="text-sm font-semibold">{label}</p>{note && <p className="text-xs text-muted-foreground">{note}</p>}</div><Switch checked={Boolean(checked)} onCheckedChange={onChange} /></div>; }
 function LabelEditor({ title,values = {},onChange }) { return <div className="mt-4"><p className="text-xs font-bold uppercase text-muted-foreground">{title}</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{Object.entries(values).map(([key,value]) => <label key={key} className="text-[10px] text-muted-foreground">{key}<input className="mt-1 h-9 w-full rounded-lg border border-border bg-background px-3 text-xs text-foreground" value={value} onChange={(event) => onChange(key,event.target.value)} /></label>)}</div></div>; }
+function ImportColumnEditor({ column,index,total,onChange,onMove,onRemove }) {
+  const protectedColumn = ['fullName','staffId','email','employmentStatus'].includes(column.key);
+  return <article className={`rounded-xl border p-4 ${column.enabled ? 'border-border bg-background' : 'border-border/60 bg-muted/30 opacity-80'}`}>
+    <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+      <div className="flex items-center gap-2">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">{index + 1}</span>
+        <div className="min-w-0"><p className="truncate text-sm font-bold">{column.label || 'Untitled column'}</p><p className="truncate font-mono text-[10px] text-muted-foreground">{column.key}{protectedColumn ? ' · protected' : column.custom ? ' · custom' : ' · standard'}</p></div>
+      </div>
+      <div className="grid flex-1 gap-3 sm:grid-cols-2 lg:grid-cols-[1fr,1.3fr,auto]">
+        <Field label="Column title"><input className={input} maxLength="60" value={column.label} onChange={(event) => onChange({ label:event.target.value })} /></Field>
+        <Field label="Accepted alternative titles"><input className={input} value={(column.aliases || []).join(', ')} onChange={(event) => onChange({ aliases:event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} placeholder="Separate aliases with commas" /></Field>
+        <div className="flex items-end gap-1">
+          <button type="button" aria-label={`Move ${column.label} up`} disabled={index === 0} onClick={() => onMove(-1)} className="flex h-10 w-10 items-center justify-center rounded-lg border border-border disabled:opacity-30"><ArrowUp className="h-4 w-4" /></button>
+          <button type="button" aria-label={`Move ${column.label} down`} disabled={index === total - 1} onClick={() => onMove(1)} className="flex h-10 w-10 items-center justify-center rounded-lg border border-border disabled:opacity-30"><ArrowDown className="h-4 w-4" /></button>
+          {column.custom && <button type="button" aria-label={`Remove ${column.label}`} onClick={onRemove} className="flex h-10 w-10 items-center justify-center rounded-lg border border-red-500/30 text-red-600"><Trash2 className="h-4 w-4" /></button>}
+        </div>
+      </div>
+    </div>
+    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+      <label className="flex min-h-10 items-center gap-2 rounded-lg border border-border px-3 text-sm"><input type="checkbox" checked={column.enabled !== false} disabled={protectedColumn} onChange={(event) => onChange({ enabled:event.target.checked, required:event.target.checked ? column.required : false })} /> Include in future templates</label>
+      <label className="flex min-h-10 items-center gap-2 rounded-lg border border-border px-3 text-sm"><input type="checkbox" checked={Boolean(column.required)} disabled={protectedColumn || column.enabled === false} onChange={(event) => onChange({ required:event.target.checked })} /> Required during import</label>
+    </div>
+  </article>;
+}
+function defaultImportColumns() { return [
+  { key:'fullName',label:'Staff Name',aliases:['Full Name','Name'],type:'text',required:true,enabled:true,custom:false },
+  { key:'staffId',label:'Staff ID',aliases:['Employee ID'],type:'text',required:true,enabled:true,custom:false },
+  { key:'department',label:'Department',aliases:[],type:'text',required:false,enabled:true,custom:false },
+  { key:'position',label:'Position',aliases:['Job Title'],type:'text',required:false,enabled:true,custom:false },
+  { key:'branch',label:'Branch',aliases:[],type:'text',required:false,enabled:true,custom:false },
+  { key:'phone',label:'Phone Number',aliases:['Phone'],type:'phone',required:false,enabled:true,custom:false },
+  { key:'email',label:'Email Address',aliases:['Email','Official Email'],type:'email',required:true,enabled:true,custom:false },
+  { key:'employmentStatus',label:'Employment Status',aliases:['Status'],type:'enum',options:['Active','Inactive'],required:true,enabled:true,custom:false },
+]; }
+function editorImportSchema(value) {
+  const incoming = Array.isArray(value?.columns) ? value.columns : defaultImportColumns();
+  return {
+    version: Math.max(1, Number(value?.version) || 1),
+    maxFileSizeMb: Math.max(1, Number(value?.maxFileSizeMb) || 5),
+    maxRows: Math.max(1, Number(value?.maxRows) || 1000),
+    columns: incoming.map((column,index) => ({ ...column, order:index, aliases:Array.isArray(column.aliases) ? column.aliases : [] })),
+  };
+}
 function UploadBox({ label,current,busy,onFile }) { return <label className="mt-3 flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-border p-3 text-sm"><Upload className="h-4 w-4 text-primary" /><span className="min-w-0"><b>{busy ? 'Uploading…' : label}</b><small className="block truncate text-muted-foreground">{current || 'PNG, JPG or WebP'}</small></span><input className="hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => onFile(event.target.files?.[0])} /></label>; }
 function Banner({ children }) { return <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700">{children}</div>; }
 function tabLabel(key) { return TABS.find(([value]) => value === key)?.[1] || key; }

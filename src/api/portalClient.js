@@ -159,8 +159,8 @@ export async function createStaffRecord(payload) {
   return data.record;
 }
 
-export async function importStaffRecords(records, fileName, reason) {
-  const data = await apiRequest("/staff-records/import", { method: "POST", body: { records, fileName, reason } });
+export async function importStaffRecords(records, fileName, reason, schemaVersion) {
+  const data = await apiRequest("/staff-records/import", { method: "POST", body: { records, fileName, reason, schemaVersion } });
   return data.records || [];
 }
 

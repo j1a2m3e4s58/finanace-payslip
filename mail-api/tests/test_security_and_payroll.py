@@ -57,6 +57,55 @@ def test_rate_history_selects_profile_by_payroll_month():
     assert portal.contribution_rate_profile_for_period("2027-01", settings)["rates"]["employeeSsf"] == 7
 
 
+def test_staff_import_schema_protects_identity_columns_and_accepts_custom_columns():
+    schema = portal.normalize_staff_import_schema({
+        "version": 4,
+        "maxFileSizeMb": 8,
+        "maxRows": 2500,
+        "columns": [
+            {"key": "fullName", "label": "Employee Name", "aliases": ["Staff Name"], "enabled": False, "required": False},
+            {"key": "custom_cost_centre", "label": "Cost Centre", "aliases": ["Cost Center"], "enabled": True, "required": True, "custom": True},
+        ],
+    }, strict=True)
+    columns = {column["key"]: column for column in schema["columns"]}
+    assert columns["fullName"]["enabled"] is True
+    assert columns["fullName"]["required"] is True
+    assert columns["custom_cost_centre"]["required"] is True
+    assert {"staffId", "email", "employmentStatus"}.issubset(columns)
+    assert schema["maxFileSizeMb"] == 8
+    assert schema["maxRows"] == 2500
+
+
+def test_staff_import_schema_rejects_duplicate_titles():
+    with pytest.raises(ValueError, match="Duplicate staff import title"):
+        portal.normalize_staff_import_schema({
+            "columns": [
+                {"key": "fullName", "label": "Staff"},
+                {"key": "custom_team", "label": "Staff", "custom": True},
+            ],
+        }, strict=True)
+
+
+def test_staff_record_preserves_allowlisted_custom_import_values(monkeypatch):
+    schema = portal.normalize_staff_import_schema({
+        "columns": [
+            *portal.DEFAULT_STAFF_IMPORT_COLUMNS,
+            {"key": "custom_cost_centre", "label": "Cost Centre", "enabled": True, "custom": True},
+        ],
+    })
+    monkeypatch.setattr(portal, "load_portal_settings_store", lambda: {
+        "emailDomain": "@bawjiasecommunitybank.com",
+        "staffImportSchema": schema,
+    })
+    record = portal.normalize_staff_record({
+        "staffId": "BCB-100",
+        "fullName": "Import Test",
+        "email": "import.test@bawjiasecommunitybank.com",
+        "customFields": {"custom_cost_centre": "CC-45", "custom_unknown": "discard me"},
+    })
+    assert record["customFields"] == {"custom_cost_centre": "CC-45"}
+
+
 def test_negative_payroll_amount_is_rejected():
     payload = {field: 0 for field in portal.PAYROLL_MANUAL_FIELDS}
     payload["basicSalary"] = -1

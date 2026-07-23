@@ -86,6 +86,16 @@ DEFAULT_PORTAL_DEPARTMENTS = [
     "AUDIT",
     "ADMIN",
 ]
+DEFAULT_STAFF_IMPORT_COLUMNS = [
+    {"key": "fullName", "label": "Staff Name", "aliases": ["Full Name", "Name"], "type": "text", "required": True, "enabled": True, "custom": False},
+    {"key": "staffId", "label": "Staff ID", "aliases": ["Employee ID"], "type": "text", "required": True, "enabled": True, "custom": False},
+    {"key": "department", "label": "Department", "aliases": [], "type": "text", "required": False, "enabled": True, "custom": False},
+    {"key": "position", "label": "Position", "aliases": ["Job Title"], "type": "text", "required": False, "enabled": True, "custom": False},
+    {"key": "branch", "label": "Branch", "aliases": [], "type": "text", "required": False, "enabled": True, "custom": False},
+    {"key": "phone", "label": "Phone Number", "aliases": ["Phone"], "type": "phone", "required": False, "enabled": True, "custom": False},
+    {"key": "email", "label": "Email Address", "aliases": ["Email", "Official Email"], "type": "email", "required": True, "enabled": True, "custom": False},
+    {"key": "employmentStatus", "label": "Employment Status", "aliases": ["Status"], "type": "enum", "options": ["Active", "Inactive"], "required": True, "enabled": True, "custom": False},
+]
 DEFAULT_PORTAL_SETTINGS = {
     "bankName": "Bawjiase Community Bank PLC",
     "shortBankName": "BCB",
@@ -93,6 +103,7 @@ DEFAULT_PORTAL_SETTINGS = {
     "emailDomain": OFFICIAL_EMAIL_DOMAIN,
     "branches": DEFAULT_PORTAL_BRANCHES,
     "departments": DEFAULT_PORTAL_DEPARTMENTS,
+    "staffImportSchema": {"version": 1, "maxFileSizeMb": 5, "maxRows": 1000, "columns": DEFAULT_STAFF_IMPORT_COLUMNS},
     "loginSubtitle": "Sign in to manage staff payroll and payslips.",
     "loginButtonText": "Secure Login",
     "authorizedAccessText": "Authorized Access Only",
@@ -1158,6 +1169,106 @@ def normalize_portal_list(values, fallback: list[str], uppercase: bool = False) 
     return items or list(fallback)
 
 
+def normalize_staff_import_schema(value: object, strict: bool = False) -> dict:
+    incoming = value if isinstance(value, dict) else {}
+    raw_columns = incoming.get("columns") if isinstance(incoming.get("columns"), list) else DEFAULT_STAFF_IMPORT_COLUMNS
+    core_defaults = {item["key"]: item for item in DEFAULT_STAFF_IMPORT_COLUMNS}
+    protected_keys = {"fullName", "staffId", "email", "employmentStatus"}
+    supported_types = {"text", "email", "phone", "enum"}
+    columns = []
+    keys = set()
+    headings = set()
+
+    def heading_key(text: object) -> str:
+        return re.sub(r"[\s_-]+", " ", str(text or "").strip().lower())
+
+    for index, item in enumerate(raw_columns[:30]):
+        if not isinstance(item, dict):
+            if strict:
+                raise ValueError(f"Staff import column {index + 1} is invalid")
+            continue
+        key = str(item.get("key") or "").strip()
+        fallback = core_defaults.get(key)
+        is_custom = fallback is None
+        if is_custom and not re.fullmatch(r"custom_[a-zA-Z0-9_]{1,40}", key):
+            if strict:
+                raise ValueError("Custom staff import keys must start with custom_ and contain only letters, numbers, or underscores")
+            continue
+        if key in keys:
+            if strict:
+                raise ValueError(f"Duplicate staff import key: {key}")
+            continue
+        label = str(item.get("label") or (fallback or {}).get("label") or key).strip()[:60]
+        if not label:
+            if strict:
+                raise ValueError("Every staff import column needs a title")
+            label = key
+        normalized_label = heading_key(label)
+        if normalized_label in headings:
+            if strict:
+                raise ValueError(f"Duplicate staff import title: {label}")
+            continue
+        headings.add(normalized_label)
+        aliases = []
+        raw_aliases = item.get("aliases") if isinstance(item.get("aliases"), list) else (fallback or {}).get("aliases", [])
+        for alias_value in raw_aliases[:12]:
+            alias = str(alias_value or "").strip()[:60]
+            normalized_alias = heading_key(alias)
+            if not alias or normalized_alias in headings:
+                if strict and alias and normalized_alias in headings:
+                    raise ValueError(f"Duplicate staff import title or alias: {alias}")
+                continue
+            headings.add(normalized_alias)
+            aliases.append(alias)
+        column_type = str(item.get("type") or (fallback or {}).get("type") or "text").strip().lower()
+        if column_type not in supported_types:
+            column_type = "text"
+        enabled = True if key in protected_keys else item.get("enabled", True) is not False
+        required = True if key in protected_keys else bool(item.get("required", (fallback or {}).get("required", False))) and enabled
+        column = {
+            "key": key,
+            "label": label,
+            "aliases": aliases,
+            "type": column_type,
+            "required": required,
+            "enabled": enabled,
+            "custom": is_custom,
+            "order": len(columns),
+        }
+        if column_type == "enum":
+            options = item.get("options") if isinstance(item.get("options"), list) else (fallback or {}).get("options", [])
+            column["options"] = [str(option).strip()[:60] for option in options[:25] if str(option).strip()]
+        columns.append(column)
+        keys.add(key)
+
+    for default in DEFAULT_STAFF_IMPORT_COLUMNS:
+        if default["key"] in protected_keys and default["key"] not in keys:
+            columns.append({**default, "order": len(columns)})
+            keys.add(default["key"])
+    if len(columns) > 30:
+        raise ValueError("Staff import format cannot contain more than 30 columns")
+
+    try:
+        max_file_size = int(float(incoming.get("maxFileSizeMb", 5)))
+        max_rows = int(float(incoming.get("maxRows", 1000)))
+    except (TypeError, ValueError):
+        max_file_size, max_rows = 5, 1000
+    if strict and not 1 <= max_file_size <= 20:
+        raise ValueError("Maximum staff import size must be between 1 and 20 MB")
+    if strict and not 1 <= max_rows <= 5000:
+        raise ValueError("Maximum staff import rows must be between 1 and 5,000")
+    try:
+        version = max(1, int(incoming.get("version", 1) or 1))
+    except (TypeError, ValueError):
+        version = 1
+    return {
+        "version": version,
+        "maxFileSizeMb": min(20, max(1, max_file_size)),
+        "maxRows": min(5000, max(1, max_rows)),
+        "columns": columns,
+    }
+
+
 def merge_missing_portal_defaults(values: list[str], defaults: list[str], uppercase: bool = False) -> list[str]:
     items = normalize_portal_list(values, defaults, uppercase)
     seen = {str(item).strip().upper() for item in items}
@@ -1287,6 +1398,7 @@ def load_portal_settings_store() -> dict:
         "emailDomain": normalize_email_domain(raw.get("emailDomain")),
         "branches": normalize_portal_branches(raw.get("branches")),
         "departments": merge_missing_portal_defaults(raw.get("departments"), DEFAULT_PORTAL_DEPARTMENTS, True),
+        "staffImportSchema": normalize_staff_import_schema(raw.get("staffImportSchema")),
         "loginSubtitle": finance_text("loginSubtitle"),
         "loginButtonText": str(raw.get("loginButtonText") or DEFAULT_PORTAL_SETTINGS["loginButtonText"]),
         "authorizedAccessText": str(raw.get("authorizedAccessText") or DEFAULT_PORTAL_SETTINGS["authorizedAccessText"]),
@@ -2714,6 +2826,14 @@ def update_portal_settings():
     if error:
         return error
     current_settings = load_portal_settings_store()
+    try:
+        current_import_schema = normalize_staff_import_schema(current_settings.get("staffImportSchema"))
+        staff_import_schema = normalize_staff_import_schema(data.get("staffImportSchema"), strict=True)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    current_schema_content = {key: value for key, value in current_import_schema.items() if key != "version"}
+    new_schema_content = {key: value for key, value in staff_import_schema.items() if key != "version"}
+    staff_import_schema["version"] = current_import_schema["version"] + 1 if new_schema_content != current_schema_content else current_import_schema["version"]
     branches = normalize_portal_branches(data.get("branches"))
     contribution_rates = normalize_contribution_rates(data.get("contributionRates"))
     contribution_effective_month = normalize_effective_month(data.get("contributionRateEffectiveMonth"))
@@ -2742,6 +2862,7 @@ def update_portal_settings():
         "emailDomain": normalize_email_domain(data.get("emailDomain")),
         "branches": branches,
         "departments": normalize_portal_list(data.get("departments"), DEFAULT_PORTAL_DEPARTMENTS, True),
+        "staffImportSchema": staff_import_schema,
         "loginSubtitle": str(data.get("loginSubtitle") or DEFAULT_PORTAL_SETTINGS["loginSubtitle"]),
         "loginButtonText": str(data.get("loginButtonText") or DEFAULT_PORTAL_SETTINGS["loginButtonText"]),
         "authorizedAccessText": str(data.get("authorizedAccessText") or DEFAULT_PORTAL_SETTINGS["authorizedAccessText"]),
@@ -4474,6 +4595,15 @@ def normalize_staff_record(data: dict, existing: dict | None = None) -> dict:
     status = str(data.get("employmentStatus", current.get("employmentStatus", "active"))).strip().lower()
     if status not in {"active", "inactive"}:
         raise ValueError("Employment status must be active or inactive")
+    schema = normalize_staff_import_schema(load_portal_settings_store().get("staffImportSchema"))
+    allowed_custom_keys = {column["key"] for column in schema["columns"] if column.get("custom")}
+    current_custom = current.get("customFields") if isinstance(current.get("customFields"), dict) else {}
+    incoming_custom = data.get("customFields") if isinstance(data.get("customFields"), dict) else current_custom
+    custom_fields = {
+        key: str(incoming_custom.get(key, current_custom.get(key, "")) or "").strip()[:500]
+        for key in allowed_custom_keys
+        if key in incoming_custom or key in current_custom
+    }
     now = now_ms()
     return {
         "id": str(current.get("id") or f"staff-{now}-{secrets.randbelow(10000):04d}"),
@@ -4485,6 +4615,7 @@ def normalize_staff_record(data: dict, existing: dict | None = None) -> dict:
         "phone": normalize_phone(data.get("phone", current.get("phone", ""))),
         "email": email,
         "employmentStatus": status,
+        "customFields": custom_fields,
         "createdAt": int(current.get("createdAt", now) or now),
         "updatedAt": now,
     }
@@ -4557,11 +4688,33 @@ def import_staff_records():
     incoming = data.get("records")
     if not isinstance(incoming, list) or not incoming:
         return jsonify({"error": "At least one staff record is required"}), 400
+    schema = normalize_staff_import_schema(load_portal_settings_store().get("staffImportSchema"))
+    try:
+        supplied_schema_version = int(data.get("schemaVersion", 0) or 0)
+    except (TypeError, ValueError):
+        supplied_schema_version = 0
+    if supplied_schema_version and supplied_schema_version != schema["version"]:
+        return jsonify({"error": "The staff import format changed after this file was opened. Download the current template and review the file again."}), 409
+    if len(incoming) > schema["maxRows"]:
+        return jsonify({"error": f"Staff imports are limited to {schema['maxRows']:,} records"}), 400
+    enabled_columns = [column for column in schema["columns"] if column.get("enabled")]
+    allowed_custom = {column["key"] for column in enabled_columns if column.get("custom")}
     records = load_json_list_store(STAFF_RECORDS_STORE_PATH)
     prepared = []
     try:
-        for item in incoming:
-            record = normalize_staff_record(item if isinstance(item, dict) else {})
+        for row_number, raw_item in enumerate(incoming, 2):
+            item = raw_item if isinstance(raw_item, dict) else {}
+            custom_fields = item.get("customFields") if isinstance(item.get("customFields"), dict) else {}
+            unknown_custom = set(custom_fields) - allowed_custom
+            if unknown_custom:
+                raise ValueError(f"Row {row_number}: unrecognized custom column data")
+            for column in enabled_columns:
+                if not column.get("required"):
+                    continue
+                value = custom_fields.get(column["key"]) if column.get("custom") else item.get(column["key"])
+                if not str(value or "").strip():
+                    raise ValueError(f"Row {row_number}: {column['label']} is required")
+            record = normalize_staff_record(item)
             conflict = staff_record_conflict(records + prepared, record)
             if conflict:
                 raise ValueError(f"{record['staffId']}: {conflict}")
@@ -4573,6 +4726,8 @@ def import_staff_records():
     record_audit_log(auth_user, "STAFF_EMAIL_BULK_UPLOAD", {
         "fileName": str(data.get("fileName", "Staff import")).strip(),
         "recordCount": len(prepared),
+        "schemaVersion": schema["version"],
+        "columnKeys": [column["key"] for column in enabled_columns],
         "reason": str(data.get("reason", "Bulk staff email import")).strip(),
     })
     return jsonify({"ok": True, "records": prepared}), 201
