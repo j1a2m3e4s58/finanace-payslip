@@ -32,7 +32,7 @@ jobs:
           if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
               raise SystemExit('Only an approved HTTPS staging URL without embedded credentials is allowed')
           PY
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: zaproxy/action-baseline@v0.15.0
         with:
           target: ${{ secrets.STAGING_BASE_URL }}
