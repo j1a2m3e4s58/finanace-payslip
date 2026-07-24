@@ -125,11 +125,10 @@ DEFAULT_PORTAL_SETTINGS = {
         "supervisionAllowance": "Supervision Allowance", "riskAllowance": "Risk Allowance",
         "responsibilityAllowance": "Responsibility Allowance", "entertainmentAllowance": "Entertainment Allowance",
         "fuelTransportAllowance": "Fuel / Transport Allowance", "rentUtilityAllowance": "Rent / Utility Allowance",
-        "otherAllowances": "Other Allowances",
     },
     "deductionLabels": {
         "ssf": "5.5% SSF", "esp": "4.5% ESP", "pf": "4.5% PF", "payeIncomeTax": "P.A.Y.E Income Tax",
-        "staffWelfare": "Staff Welfare", "icuDues": "ICU Dues", "loans": "Loans", "otherDeductions": "Other Deductions",
+        "staffWelfare": "Staff Welfare", "icuDues": "ICU Dues",
     },
     "employerContributionLabels": {"employerSsf": "Employer SSF", "employerPf": "Employer PF"},
     "pdfPasswordRule": "staff_id",
@@ -375,6 +374,7 @@ def enforce_transport_and_api_authentication():
 
 
 RATE_LIMIT_LOCK = threading.RLock()
+AUDIT_LOG_LOCK = threading.RLock()
 
 
 def consume_rate_limit(scope: str, identity: str, maximum: int, window_seconds: int) -> int:
@@ -1479,18 +1479,25 @@ def load_audit_logs_store() -> list[dict]:
                     details = parsed if isinstance(parsed, dict) else {}
                 except json.JSONDecodeError:
                     details = {}
+            action = str(item.get("action", "")).strip()
+            is_protected = bool(
+                item.get("isProtected")
+                or details.get("immutable")
+                or action.upper() == "AUDIT_LOGS_PURGED"
+            )
             normalized.append(
                 {
                     "id": int(item.get("id", 0) or 0),
                     "actorId": str(item.get("actorId", "") or "system"),
                     "actorName": str(item.get("actorName", "") or "System"),
-                    "action": str(item.get("action", "")).strip(),
+                    "action": action,
                     "target": target_text,
                     "details": details,
                     "oldValue": item.get("oldValue", details.get("oldValue", details.get("before", details.get("beforeEmail")))),
                     "newValue": item.get("newValue", details.get("newValue", details.get("after", details.get("email")))),
                     "ipAddress": str(item.get("ipAddress", "") or "unknown"),
                     "timestamp": int(item.get("timestamp", 0) or 0),
+                    "isProtected": is_protected,
                 }
             )
         except Exception:
@@ -1503,7 +1510,19 @@ def load_audit_logs_store() -> list[dict]:
 
 
 def save_audit_logs_store(items: list[dict]) -> None:
-    save_json_list_store(AUDIT_LOGS_STORE_PATH, items[:1000])
+    # Ordinary audit events are bounded, but purge evidence is deliberately
+    # retained outside that limit so a privileged deletion always leaves a
+    # permanent, non-deletable record.
+    ordinary = [item for item in items if not item.get("isProtected")][:1000]
+    protected = [item for item in items if item.get("isProtected")]
+    retained_ids = {int(item.get("id", 0) or 0) for item in ordinary}
+    save_json_list_store(
+        AUDIT_LOGS_STORE_PATH,
+        ordinary + [
+            item for item in protected
+            if int(item.get("id", 0) or 0) not in retained_ids
+        ],
+    )
 
 
 def record_audit_log(
@@ -1512,26 +1531,28 @@ def record_audit_log(
     target: object,
     ip_address: str | None = None,
 ) -> dict:
-    logs = load_audit_logs_store()
-    target_text = (
-        target
-        if isinstance(target, str)
-        else json.dumps(target, ensure_ascii=True, sort_keys=True)
-    )
-    entry = {
-        "id": next_content_id(logs, floor=1),
-        "actorId": str(actor.get("id", "system") if actor else "system"),
-        "actorName": str(actor.get("fullname", "System") if actor else "System"),
-        "action": str(action or "").strip().upper(),
-        "target": str(target_text or "").strip(),
-        "details": target if isinstance(target, dict) else {},
-        "oldValue": target.get("oldValue", target.get("before", target.get("beforeEmail"))) if isinstance(target, dict) else None,
-        "newValue": target.get("newValue", target.get("after", target.get("email"))) if isinstance(target, dict) else None,
-        "ipAddress": ip_address or request_ip_address(),
-        "timestamp": now_ms(),
-    }
-    logs.insert(0, entry)
-    save_audit_logs_store(logs)
+    with AUDIT_LOG_LOCK:
+        logs = load_audit_logs_store()
+        target_text = (
+            target
+            if isinstance(target, str)
+            else json.dumps(target, ensure_ascii=True, sort_keys=True)
+        )
+        entry = {
+            "id": next_content_id(logs, floor=1),
+            "actorId": str(actor.get("id", "system") if actor else "system"),
+            "actorName": str(actor.get("fullname", "System") if actor else "System"),
+            "action": str(action or "").strip().upper(),
+            "target": str(target_text or "").strip(),
+            "details": target if isinstance(target, dict) else {},
+            "oldValue": target.get("oldValue", target.get("before", target.get("beforeEmail"))) if isinstance(target, dict) else None,
+            "newValue": target.get("newValue", target.get("after", target.get("email"))) if isinstance(target, dict) else None,
+            "ipAddress": ip_address or request_ip_address(),
+            "timestamp": now_ms(),
+            "isProtected": False,
+        }
+        logs.insert(0, entry)
+        save_audit_logs_store(logs)
     return entry
 
 
@@ -2515,10 +2536,100 @@ def get_audit_logs():
     _, user, error = require_authenticated_user()
     if error:
         return error
-    if user["role"] not in {"SuperAdmin", "Admin", "Auditor"}:
+    if user["role"] not in {"BossAdmin", "SuperAdmin", "Admin", "Auditor"}:
         return jsonify({"error": "Audit access required"}), 403
     logs = sorted(load_audit_logs_store(), key=lambda item: int(item["timestamp"]), reverse=True)
     return jsonify({"logs": logs})
+
+
+@app.route("/api/audit-logs/purge-selected", methods=["POST", "OPTIONS"])
+def purge_selected_audit_logs():
+    preflight = handle_options()
+    if preflight:
+        return preflight
+    _, auth_user, error = require_portal_controller()
+    if error:
+        return error
+    data, error = require_json()
+    if error:
+        return error
+    if str(data.get("confirmation", "")).strip() != "DELETE AUDIT LOGS":
+        return jsonify({"error": "Type DELETE AUDIT LOGS to confirm removal"}), 400
+    reason = str(data.get("reason", "")).strip()
+    if len(reason) < 10 or len(reason) > 500:
+        return jsonify({"error": "Provide a removal reason between 10 and 500 characters"}), 400
+    raw_ids = data.get("ids")
+    if not isinstance(raw_ids, list) or not raw_ids or len(raw_ids) > 250:
+        return jsonify({"error": "Select between 1 and 250 audit records"}), 400
+    try:
+        selected_ids = sorted({int(value) for value in raw_ids if int(value) > 0})
+    except (TypeError, ValueError):
+        return jsonify({"error": "Audit record IDs must be positive numbers"}), 400
+    if not selected_ids:
+        return jsonify({"error": "Select at least one audit record"}), 400
+
+    with AUDIT_LOG_LOCK:
+        logs = load_audit_logs_store()
+        by_id = {int(item.get("id", 0) or 0): item for item in logs}
+        missing_ids = [item_id for item_id in selected_ids if item_id not in by_id]
+        if missing_ids:
+            return jsonify({"error": "One or more selected audit records no longer exist", "missingIds": missing_ids}), 409
+        protected_ids = [item_id for item_id in selected_ids if by_id[item_id].get("isProtected")]
+        if protected_ids:
+            return jsonify({"error": "Protected purge evidence cannot be removed", "protectedIds": protected_ids}), 403
+
+        selected = [by_id[item_id] for item_id in selected_ids]
+        deleted_digest = hashlib.sha256(
+            json.dumps(selected, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        previous_evidence = next(
+            (
+                str(item.get("details", {}).get("evidenceHash", ""))
+                for item in logs
+                if item.get("isProtected") and item.get("details", {}).get("evidenceHash")
+            ),
+            "",
+        )
+        timestamp = now_ms()
+        evidence_details = {
+            "immutable": True,
+            "deletedCount": len(selected_ids),
+            "deletedIds": selected_ids,
+            "reason": reason,
+            "deletedRecordsSha256": deleted_digest,
+            "previousEvidenceHash": previous_evidence,
+        }
+        evidence_payload = {
+            "actorId": str(auth_user.get("id", "")),
+            "actorName": str(auth_user.get("fullname", "")),
+            "timestamp": timestamp,
+            **evidence_details,
+        }
+        evidence_details["evidenceHash"] = hashlib.sha256(
+            json.dumps(evidence_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        evidence = {
+            "id": next_content_id(logs, floor=1),
+            "actorId": str(auth_user.get("id", "")),
+            "actorName": str(auth_user.get("fullname", "Platform Controller")),
+            "action": "AUDIT_LOGS_PURGED",
+            "target": json.dumps(evidence_details, ensure_ascii=True, sort_keys=True),
+            "details": evidence_details,
+            "oldValue": {"deletedCount": len(selected_ids), "deletedIds": selected_ids},
+            "newValue": None,
+            "ipAddress": request_ip_address(),
+            "timestamp": timestamp,
+            "isProtected": True,
+        }
+        selected_id_set = set(selected_ids)
+        remaining = [item for item in logs if int(item.get("id", 0) or 0) not in selected_id_set]
+        remaining.insert(0, evidence)
+        save_audit_logs_store(remaining)
+    return jsonify({
+        "ok": True,
+        "deletedCount": len(selected_ids),
+        "evidence": evidence,
+    })
 
 
 REPORT_DEFINITIONS = {
@@ -2564,7 +2675,7 @@ def require_report_viewer():
     token, user, error = require_authenticated_user()
     if error:
         return token, user, error
-    if user.get("role") not in {"SuperAdmin", "FinanceApprover", "Auditor", "Management"}:
+    if user.get("role") not in {"BossAdmin", "SuperAdmin", "FinanceApprover", "Auditor", "Management"}:
         return token, user, (jsonify({"error": "Reports access required"}), 403)
     return token, user, None
 
@@ -2716,10 +2827,12 @@ def reporting_dashboard():
 
 @app.route("/api/reports", methods=["GET"])
 def get_report_data():
-    _, _, error = require_report_viewer()
+    _, auth_user, error = require_report_viewer()
     if error:
         return error
     report_type = str(request.args.get("type", "payroll_summary")).strip()
+    if auth_user.get("role") == "BossAdmin" and report_type != "audit_trail":
+        return jsonify({"error": "Platform Controller access is limited to the audit trail"}), 403
     definition = REPORT_DEFINITIONS.get(report_type)
     if not definition:
         return jsonify({"error": "Unknown report type"}), 400
@@ -2739,6 +2852,8 @@ def export_report_data():
     if error:
         return error
     report_type = str(request.args.get("type", "payroll_summary")).strip()
+    if auth_user.get("role") == "BossAdmin" and report_type != "audit_trail":
+        return jsonify({"error": "Platform Controller access is limited to the audit trail"}), 403
     export_format = str(request.args.get("format", "pdf")).strip().lower()
     definition = REPORT_DEFINITIONS.get(report_type)
     if not definition or export_format not in {"pdf", "xlsx"}:
@@ -3440,9 +3555,9 @@ def get_active_staff():
 
 PAYROLL_INCOME_FIELDS = [
     "basicSalary", "supervisionAllowance", "riskAllowance", "responsibilityAllowance",
-    "entertainmentAllowance", "fuelTransportAllowance", "rentUtilityAllowance", "otherAllowances",
+    "entertainmentAllowance", "fuelTransportAllowance", "rentUtilityAllowance",
 ]
-PAYROLL_MANUAL_DEDUCTION_FIELDS = ["payeIncomeTax", "staffWelfare", "icuDues", "loans", "otherDeductions"]
+PAYROLL_MANUAL_DEDUCTION_FIELDS = ["payeIncomeTax", "staffWelfare", "icuDues"]
 PAYROLL_MANUAL_FIELDS = PAYROLL_INCOME_FIELDS + PAYROLL_MANUAL_DEDUCTION_FIELDS
 PAYROLL_TRACKED_FIELDS = PAYROLL_MANUAL_FIELDS + [
     "ssf", "esp", "pf", "totalIncome", "totalDeductions", "netSalary", "employerSsf", "employerPf",
@@ -3451,10 +3566,9 @@ PAYROLL_FIELD_LABELS = {
     "basicSalary": "Basic Salary", "supervisionAllowance": "Supervision Allowance",
     "riskAllowance": "Risk Allowance", "responsibilityAllowance": "Responsibility Allowance",
     "entertainmentAllowance": "Entertainment Allowance", "fuelTransportAllowance": "Fuel/Transport Allowance",
-    "rentUtilityAllowance": "Rent/Utility Allowance", "otherAllowances": "Other Allowances",
+    "rentUtilityAllowance": "Rent/Utility Allowance",
     "ssf": "5.5% SSF", "esp": "4.5% ESP", "pf": "4.5% PF", "payeIncomeTax": "P.A.Y.E Income Tax",
-    "staffWelfare": "Staff Welfare", "icuDues": "ICU Dues", "loans": "Loans",
-    "otherDeductions": "Other Deductions", "totalIncome": "Total Income",
+    "staffWelfare": "Staff Welfare", "icuDues": "ICU Dues", "totalIncome": "Total Income",
     "totalDeductions": "Total Deductions", "netSalary": "Net Salary",
     "employerSsf": "Employer SSF", "employerPf": "Employer PF",
 }

@@ -53,7 +53,18 @@ def generate_report_pdf(title: str, columns: list[dict], rows: list[dict], filte
                 data.append([Paragraph(html.escape(_display(row.get(column["key"]))).replace("\n", "<br/>"), cell) for column in chunk])
             available_width = landscape(A4)[0] - 24 * mm
             widths = [available_width / len(chunk)] * len(chunk)
-            table = Table(data, colWidths=widths, repeatRows=1, hAlign="LEFT")
+            # Audit evidence can contain large before/after JSON values.  A normal
+            # Platypus table only splits between rows, so one large audit event can
+            # be taller than a page and raise LayoutError.  Allow ReportLab to
+            # split inside an oversized row while still repeating the header.
+            table = Table(
+                data,
+                colWidths=widths,
+                repeatRows=1,
+                hAlign="LEFT",
+                splitByRow=1,
+                splitInRow=1,
+            )
             table.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), GREEN), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                 ("LINEBELOW", (0, 0), (-1, 0), 1.5, GOLD), ("VALIGN", (0, 0), (-1, -1), "TOP"),

@@ -363,6 +363,13 @@ export async function getAuditLogs() {
   return data.logs || [];
 }
 
+export async function purgeSelectedAuditLogs(ids, reason) {
+  return apiRequest("/audit-logs/purge-selected", {
+    method: "POST",
+    body: { ids, reason, confirmation: "DELETE AUDIT LOGS" },
+  });
+}
+
 export async function getNotifications() {
   const data = await apiRequest("/notifications");
   return data.notifications || [];

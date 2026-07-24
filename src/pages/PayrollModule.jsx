@@ -16,12 +16,12 @@ const money = (value) => new Intl.NumberFormat('en-GH', { style: 'currency', cur
 export const incomeFields = [
   ['basicSalary', 'Basic Salary'], ['supervisionAllowance', 'Supervision Allowance'], ['riskAllowance', 'Risk Allowance'],
   ['responsibilityAllowance', 'Responsibility Allowance'], ['entertainmentAllowance', 'Entertainment Allowance'],
-  ['fuelTransportAllowance', 'Fuel / Transport'], ['rentUtilityAllowance', 'Rent / Utility'], ['otherAllowances', 'Other Allowances'],
+  ['fuelTransportAllowance', 'Fuel / Transport'], ['rentUtilityAllowance', 'Rent / Utility'],
 ];
 /** @type {Array<[string, string, boolean?]>} */
 export const deductionFields = [
   ['ssf', '5.5% SSF', true], ['esp', '4.5% ESP', true], ['pf', '4.5% PF', true],
-  ['payeIncomeTax', 'P.A.Y.E Income Tax'], ['staffWelfare', 'Staff Welfare'], ['icuDues', 'ICU Dues'], ['loans', 'Loans'], ['otherDeductions', 'Other Deductions'],
+  ['payeIncomeTax', 'P.A.Y.E Income Tax'], ['staffWelfare', 'Staff Welfare'], ['icuDues', 'ICU Dues'],
 ];
 const defaultContributionRates = { employeeSsf: 5.5, employeeEsp: 4.5, employeePf: 4.5, employerSsf: 13, employerPf: 5 };
 const defaultValidationRules = { maxBasicSalary: 1000000, maxOtherAmount: 250000, deductionWarningPercent: 75 };

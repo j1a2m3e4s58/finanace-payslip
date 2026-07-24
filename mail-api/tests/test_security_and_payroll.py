@@ -3,6 +3,7 @@ from io import BytesIO
 
 import pytest
 from cryptography.fernet import Fernet
+from pypdf import PdfReader
 from werkzeug.datastructures import FileStorage
 
 import app as portal
@@ -42,6 +43,35 @@ def test_payroll_calculations_use_configured_rate_snapshot():
     assert result["employerSsf"] == 280
     assert result["employerPf"] == 140
     assert result["netSalary"] == 1780
+
+
+def test_removed_template_fields_are_ignored_by_payroll_and_pdf():
+    payload = {field: 0 for field in portal.PAYROLL_MANUAL_FIELDS}
+    payload.update({
+        "basicSalary": 1000,
+        "staffId": "BCB-003",
+        "fullName": "Template Test",
+        "otherAllowances": 999,
+        "loans": 888,
+        "otherDeductions": 777,
+    })
+    result = portal.calculate_payroll_entry(payload)
+    assert result["totalIncome"] == 1000
+    assert result["totalDeductions"] == 145
+    assert result["netSalary"] == 855
+    assert "otherAllowances" not in result
+    assert "loans" not in result
+    assert "otherDeductions" not in result
+
+    pdf = portal.generate_payslip_pdf(
+        {"period": "2026-07", "version": 1},
+        {**result, "department": "Finance", "branch": "Head Office"},
+        "Bawjiase Community Bank PLC",
+    )
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages)
+    assert "Other Allowances" not in text
+    assert "Loans" not in text
+    assert "Other Deductions" not in text
 
 
 def test_rate_history_selects_profile_by_payroll_month():
@@ -124,9 +154,103 @@ def test_destructive_and_bypass_routes_are_absent():
     rules = {rule.rule for rule in portal.app.url_map.iter_rules()}
     assert "/api/audit-logs/delete" not in rules
     assert "/api/audit-logs/<int:item_id>/delete" not in rules
+    assert "/api/audit-logs/purge-selected" in rules
     assert "/api/staff/<user_id>/delete" not in rules
     assert "/api/payroll-batches/<batch_id>/mark-sent" not in rules
     assert "/api/auth/register" in rules
+
+
+def test_boss_admin_can_view_audit_logs_but_not_confidential_reports(monkeypatch):
+    boss = {"id": "boss-1", "fullname": "Platform Controller", "role": "BossAdmin"}
+    monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", boss, None))
+    monkeypatch.setattr(portal, "load_audit_logs_store", lambda: [{
+        "id": 1, "action": "LOGIN", "target": "test", "timestamp": 1, "isProtected": False,
+    }])
+    with portal.app.test_request_context("/api/audit-logs"):
+        response = portal.get_audit_logs()
+        assert response.get_json()["logs"][0]["action"] == "LOGIN"
+    with portal.app.test_request_context("/api/reports?type=payroll_summary"):
+        response, status = portal.get_report_data()
+        assert status == 403
+        assert "audit trail" in response.get_json()["error"].lower()
+
+
+def test_boss_admin_can_export_audit_trail_pdf(monkeypatch):
+    boss = {"id": "boss-1", "fullname": "Platform Controller", "role": "BossAdmin"}
+    monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", boss, None))
+    monkeypatch.setattr(portal, "load_audit_logs_store", lambda: [])
+    monkeypatch.setattr(portal, "load_portal_settings_store", lambda: {"bankName": "Test Bank"})
+    monkeypatch.setattr(portal, "generate_report_pdf", lambda *_args: b"%PDF-1.4 test")
+    monkeypatch.setattr(portal, "record_audit_log", lambda *_args, **_kwargs: None)
+    with portal.app.test_request_context("/api/reports/export?type=audit_trail&format=pdf"):
+        response = portal.export_report_data()
+    assert response.status_code == 200
+    assert response.mimetype == "application/pdf"
+    response.direct_passthrough = False
+    assert response.get_data().startswith(b"%PDF-1.4")
+
+
+def test_only_boss_admin_can_purge_selected_audit_logs(monkeypatch):
+    monkeypatch.setattr(
+        portal,
+        "require_authenticated_user",
+        lambda: ("token", {"id": "admin-1", "fullname": "Admin", "role": "SuperAdmin"}, None),
+    )
+    with portal.app.test_request_context(
+        "/api/audit-logs/purge-selected",
+        method="POST",
+        json={"ids": [1], "reason": "Approved retention cleanup", "confirmation": "DELETE AUDIT LOGS"},
+    ):
+        response, status = portal.purge_selected_audit_logs()
+    assert status == 403
+    assert response.get_json()["error"] == "Boss Admin access required"
+
+
+def test_purge_selected_audit_logs_creates_protected_tamper_evidence(monkeypatch):
+    boss = {"id": "boss-1", "fullname": "Platform Controller", "role": "BossAdmin"}
+    logs = [
+        {"id": 1, "actorId": "u1", "actorName": "Finance", "action": "LOGIN", "target": "record 1", "details": {}, "oldValue": None, "newValue": None, "ipAddress": "127.0.0.1", "timestamp": 100, "isProtected": False},
+        {"id": 2, "actorId": "u1", "actorName": "Finance", "action": "STAFF_EDIT", "target": "record 2", "details": {}, "oldValue": "a", "newValue": "b", "ipAddress": "127.0.0.1", "timestamp": 200, "isProtected": False},
+    ]
+    saved = {}
+    monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", boss, None))
+    monkeypatch.setattr(portal, "load_audit_logs_store", lambda: list(logs))
+    monkeypatch.setattr(portal, "save_audit_logs_store", lambda items: saved.update({"items": items}))
+    with portal.app.test_request_context(
+        "/api/audit-logs/purge-selected",
+        method="POST",
+        json={"ids": [1, 2], "reason": "Approved retention cleanup", "confirmation": "DELETE AUDIT LOGS"},
+    ):
+        response = portal.purge_selected_audit_logs()
+    payload = response.get_json()
+    assert payload["deletedCount"] == 2
+    evidence = saved["items"][0]
+    assert evidence["action"] == "AUDIT_LOGS_PURGED"
+    assert evidence["isProtected"] is True
+    assert evidence["details"]["immutable"] is True
+    assert evidence["details"]["deletedIds"] == [1, 2]
+    assert len(evidence["details"]["deletedRecordsSha256"]) == 64
+    assert len(evidence["details"]["evidenceHash"]) == 64
+
+
+def test_protected_purge_evidence_cannot_be_purged(monkeypatch):
+    boss = {"id": "boss-1", "fullname": "Platform Controller", "role": "BossAdmin"}
+    protected = {
+        "id": 9, "actorId": "boss-1", "actorName": "Platform Controller",
+        "action": "AUDIT_LOGS_PURGED", "target": "evidence", "details": {"immutable": True},
+        "oldValue": None, "newValue": None, "ipAddress": "127.0.0.1",
+        "timestamp": 300, "isProtected": True,
+    }
+    monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", boss, None))
+    monkeypatch.setattr(portal, "load_audit_logs_store", lambda: [protected])
+    with portal.app.test_request_context(
+        "/api/audit-logs/purge-selected",
+        method="POST",
+        json={"ids": [9], "reason": "Attempt to remove evidence", "confirmation": "DELETE AUDIT LOGS"},
+    ):
+        response, status = portal.purge_selected_audit_logs()
+    assert status == 403
+    assert response.get_json()["protectedIds"] == [9]
 
 
 def test_new_user_security_fields_are_preserved():
@@ -388,7 +512,7 @@ def test_worker_heartbeat_reports_healthy(tmp_path, monkeypatch):
         ("require_payroll_viewer", {"SuperAdmin", "FinanceOfficer", "FinanceApprover"}),
         ("require_payroll_preparer", {"SuperAdmin", "FinanceOfficer"}),
         ("require_payroll_approver", {"SuperAdmin", "FinanceApprover"}),
-        ("require_report_viewer", {"SuperAdmin", "FinanceApprover", "Auditor", "Management"}),
+        ("require_report_viewer", {"BossAdmin", "SuperAdmin", "FinanceApprover", "Auditor", "Management"}),
     ],
 )
 def test_complete_role_guard_matrix(monkeypatch, guard, allowed_roles):

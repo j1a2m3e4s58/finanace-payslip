@@ -1,16 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Columns3, Eye, FileSpreadsheet, FileText, Filter, Search, ShieldCheck } from 'lucide-react';
-import { exportReport, getReportData } from '@/api/portalClient';
+import { CalendarDays, ChevronLeft, ChevronRight, Columns3, Eye, FileSpreadsheet, FileText, Filter, Search, ShieldCheck, Trash2 } from 'lucide-react';
+import { exportReport, getReportData, purgeSelectedAuditLogs } from '@/api/portalClient';
 import { EmptyHint, PageHeader, PrimaryButton, SecondaryButton } from '@/components/payroll/PageElements';
 import { toast } from '@/components/ui/use-toast';
 import ResponsiveSheet from '@/components/ui/responsive-sheet';
+import ConfirmActionDialog from '@/components/ui/confirm-action-dialog';
+import { useAuth } from '@/lib/AuthContext';
+import { ROLES } from '@/lib/permissions';
 
 const inputClass = 'h-11 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/25';
 const defaultFilters = { search: '', action: '', dateFrom: '', dateTo: '' };
 const defaultColumns = ['dateTime', 'actorName', 'action', 'target', 'ipAddress'];
 const Card = ({ children, className = '' }) => <section className={`rounded-xl border border-border bg-card p-4 sm:p-5 ${className}`}>{children}</section>;
 
-export default function AuditLogs() {
+export default function AuditLogs({ embedded = false }) {
+  const { user } = useAuth();
+  const isBossAdmin = user?.role === ROLES.BOSS_ADMIN;
   const [filters, setFilters] = useState(defaultFilters);
   const [data, setData] = useState({ columns: [], rows: [], pagination: {} });
   const [page, setPage] = useState(1);
@@ -22,6 +27,10 @@ export default function AuditLogs() {
   const [filterName, setFilterName] = useState('');
   const [savedFilters, setSavedFilters] = useState([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
   useEffect(() => { window.localStorage.removeItem('bcb_audit_saved_filters'); }, []);
 
   const load = async (next = filters, nextPage = page, nextSize = pageSize) => { setBusy('load'); try { setData(await getReportData('audit_trail', { ...next, page: nextPage, pageSize: nextSize })); setError(''); } catch (err) { setError(err.message); } finally { setBusy(''); } };
@@ -32,10 +41,28 @@ export default function AuditLogs() {
   const shortcut = (key) => { const range = dateRange(key); const next = { ...filters, ...range }; setFilters(next); apply(next); };
   const saveFilter = () => { const name = filterName.trim(); if (!name) return; const next = [...savedFilters.filter((item) => item.name !== name), { name, filters }]; setSavedFilters(next); setFilterName(''); toast.success('The audit filter is available only for this page visit.', { title: 'Temporary filter saved' }); };
   const applySavedFilter = (index) => { const item = savedFilters[index]; if (!item) return; const next = { ...defaultFilters, ...item.filters }; setFilters(next); apply(next); };
-  const download = async (format) => { setBusy(format); try { saveBlob(await exportReport('audit_trail', format, filters)); toast.success('Every matching audit event was included in the export.', { title: 'Audit export ready' }); } catch (err) { setError(err.message); } finally { setBusy(''); } };
+  const download = async (format) => { setBusy(format); try { saveBlob(await exportReport('audit_trail', format, filters)); setError(''); toast.success('Every matching audit event was included in the export.', { title: 'Audit export ready' }); } catch (err) { setError(err.message); toast.error(err.message, { title: `${format.toUpperCase()} export failed` }); } finally { setBusy(''); } };
+  const pageIds = data.rows.filter((event) => !event.isProtected).map((event) => event.id).filter(Boolean);
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id));
+  const toggleSelected = (id) => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const togglePage = () => setSelectedIds((current) => allPageSelected ? current.filter((id) => !pageIds.includes(id)) : [...new Set([...current, ...pageIds])]);
+  const purgeSelected = async () => {
+    if (!isBossAdmin || !selectedIds.length || deleteConfirmation !== 'DELETE AUDIT LOGS' || !deleteReason.trim()) return;
+    setBusy('delete');
+    try {
+      await purgeSelectedAuditLogs(selectedIds, deleteReason.trim());
+      const count = selectedIds.length;
+      setSelectedIds([]); setDeleteOpen(false); setDeleteReason(''); setDeleteConfirmation('');
+      await load(filters, page, pageSize);
+      toast.success(`${count} selected audit ${count === 1 ? 'event was' : 'events were'} deleted.`, { title: 'Audit logs deleted' });
+    } catch (err) {
+      setError(err.message);
+      toast.error(err.message, { title: 'Audit logs were not deleted' });
+    } finally { setBusy(''); }
+  };
 
   return <div className="space-y-6">
-    <PageHeader title="Audit Logs" description="Review immutable evidence of who changed what, when, and from which IP address." />
+    {!embedded && <PageHeader title="Audit Logs" description="Review evidence of who changed what, when, and from which IP address." />}
     {error && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700">{error}</div>}
     <Card>
       <button type="button" onClick={() => setFiltersOpen((current) => !current)} className="mb-3 flex min-h-11 w-full items-center justify-between rounded-lg border border-border px-3 text-sm font-semibold md:hidden" aria-expanded={filtersOpen}><span className="flex items-center gap-2"><Filter className="h-4 w-4 text-primary" /> Audit filters</span><span className="rounded-full bg-primary/10 px-2 py-1 text-[10px] text-primary">{Object.values(filters).filter(Boolean).length} active</span></button>
@@ -49,13 +76,15 @@ export default function AuditLogs() {
     <Card className="border-primary/20 bg-primary/[.025]"><div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"><div><p className="font-heading text-lg font-bold">Exported audit report</p><p className="text-sm text-muted-foreground">The screen shows {data.rows.length} events on page {page}; exports contain all {data.pagination?.total ?? data.rows.length} matching events.</p></div><div className="flex flex-col gap-2 sm:flex-row"><SecondaryButton disabled={Boolean(busy)} onClick={() => download('pdf')}><FileText className="h-4 w-4" /> Export all to PDF</SecondaryButton><PrimaryButton disabled={Boolean(busy)} onClick={() => download('xlsx')}><FileSpreadsheet className="h-4 w-4" /> Export all to Excel</PrimaryButton></div></div></Card>
 
     <Card>
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="font-heading text-xl font-bold">On-screen audit events</h2><p className="text-sm text-muted-foreground">Open a record to inspect complete before-and-after values vertically.</p></div><ColumnPicker columns={data.columns} visible={visibleColumns} toggle={(key) => setVisibleColumns((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} /></div>
-      <div className="grid gap-3 md:hidden">{data.rows.map((event) => <article key={event.id} className="rounded-xl border border-border p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-semibold">{event.actorName}</p><p className="text-xs text-muted-foreground">{event.dateTime}</p></div><span className="rounded-md bg-muted px-2 py-1 text-[10px] font-bold">{cleanAction(event.action)}</span></div><p className="mt-3 break-words text-sm">{event.target || 'System activity'}</p><SecondaryButton className="mt-4 w-full" onClick={() => setSelected(event)}><Eye className="h-4 w-4" /> View evidence</SecondaryButton></article>)}</div>
-      <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[720px] text-left text-sm"><thead className="border-b border-border bg-muted/30 text-xs uppercase text-muted-foreground"><tr>{columns.map((column) => <th key={column.key} className="whitespace-nowrap px-3 py-3">{column.label}</th>)}<th className="px-3 py-3">Details</th></tr></thead><tbody>{data.rows.map((event) => <tr key={event.id} className="border-b border-border/60 align-top last:border-0">{columns.map((column) => <td key={column.key} className="max-w-sm break-words px-3 py-3">{column.key === 'actorName' ? <span className="inline-flex items-center gap-2 font-semibold"><ShieldCheck className="h-4 w-4 text-primary" />{display(event[column.key])}</span> : column.key === 'action' ? <span className="rounded-md bg-muted px-2 py-1 text-xs font-bold">{cleanAction(event.action)}</span> : display(event[column.key])}</td>)}<td className="px-3 py-2"><button onClick={() => setSelected(event)} className="rounded-lg p-2 text-primary hover:bg-primary/10" title="View full event"><Eye className="h-4 w-4" /></button></td></tr>)}</tbody></table></div>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="font-heading text-xl font-bold">On-screen audit events</h2><p className="text-sm text-muted-foreground">Open a record to inspect complete before-and-after values vertically.</p></div><div className="flex flex-wrap items-center gap-2">{isBossAdmin && <button type="button" disabled={!selectedIds.length || Boolean(busy)} onClick={() => setDeleteOpen(true)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-red-500/40 px-3 text-sm font-bold text-red-700 disabled:opacity-40 dark:text-red-400"><Trash2 className="h-4 w-4" /> Delete selected ({selectedIds.length})</button>}<ColumnPicker columns={data.columns} visible={visibleColumns} toggle={(key) => setVisibleColumns((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} /></div></div>
+      {isBossAdmin && pageIds.length > 0 && <label className="mb-3 flex min-h-10 cursor-pointer items-center gap-2 rounded-lg bg-muted/40 px-3 text-sm font-semibold md:hidden"><input type="checkbox" checked={allPageSelected} onChange={togglePage} /> Select every event on this page</label>}
+      <div className="grid gap-3 md:hidden">{data.rows.map((event) => <article key={event.id} className="rounded-xl border border-border p-4">{isBossAdmin && (event.isProtected ? <p className="mb-3 text-xs font-bold text-amber-700 dark:text-amber-300">Protected purge evidence</p> : <label className="mb-3 flex cursor-pointer items-center gap-2 text-xs font-bold text-muted-foreground"><input type="checkbox" checked={selectedIds.includes(event.id)} onChange={() => toggleSelected(event.id)} /> Select event</label>)}<div className="flex items-start justify-between gap-3"><div><p className="font-semibold">{event.actorName}</p><p className="text-xs text-muted-foreground">{event.dateTime}</p></div><span className="rounded-md bg-muted px-2 py-1 text-[10px] font-bold">{cleanAction(event.action)}</span></div><p className="mt-3 break-words text-sm">{event.target || 'System activity'}</p><SecondaryButton className="mt-4 w-full" onClick={() => setSelected(event)}><Eye className="h-4 w-4" /> View evidence</SecondaryButton></article>)}</div>
+      <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[720px] text-left text-sm"><thead className="border-b border-border bg-muted/30 text-xs uppercase text-muted-foreground"><tr>{isBossAdmin && <th className="w-12 px-3 py-3"><input type="checkbox" aria-label="Select every removable audit event on this page" checked={allPageSelected} onChange={togglePage} /></th>}{columns.map((column) => <th key={column.key} className="whitespace-nowrap px-3 py-3">{column.label}</th>)}<th className="px-3 py-3">Details</th></tr></thead><tbody>{data.rows.map((event) => <tr key={event.id} className="border-b border-border/60 align-top last:border-0">{isBossAdmin && <td className="px-3 py-3">{event.isProtected ? <span className="text-xs font-bold text-amber-700 dark:text-amber-300">Protected</span> : <input type="checkbox" aria-label={`Select audit event ${event.id}`} checked={selectedIds.includes(event.id)} onChange={() => toggleSelected(event.id)} />}</td>}{columns.map((column) => <td key={column.key} className="max-w-sm break-words px-3 py-3">{column.key === 'actorName' ? <span className="inline-flex items-center gap-2 font-semibold"><ShieldCheck className="h-4 w-4 text-primary" />{display(event[column.key])}</span> : column.key === 'action' ? <span className="rounded-md bg-muted px-2 py-1 text-xs font-bold">{cleanAction(event.action)}</span> : display(event[column.key])}</td>)}<td className="px-3 py-2"><button onClick={() => setSelected(event)} className="rounded-lg p-2 text-primary hover:bg-primary/10" title="View full event"><Eye className="h-4 w-4" /></button></td></tr>)}</tbody></table></div>
       {!data.rows.length && busy !== 'load' && <EmptyHint>No audit activity matched the selected filters.</EmptyHint>}
       <div className="mt-5 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between"><select aria-label="Rows per audit page" className={`${inputClass} w-36`} value={pageSize} onChange={(event) => { const size = Number(event.target.value); setPageSize(size); setPage(1); load(filters,1,size); }}><option value="10">10 per page</option><option value="25">25 per page</option><option value="50">50 per page</option><option value="100">100 per page</option></select><div className="flex items-center justify-between gap-3"><SecondaryButton disabled={page <= 1 || Boolean(busy)} onClick={() => { const next = page - 1; setPage(next); load(filters,next,pageSize); }}><ChevronLeft className="h-4 w-4" /> Previous</SecondaryButton><span className="text-sm text-muted-foreground">Page {page} of {data.pagination?.pages || 1}</span><SecondaryButton disabled={page >= (data.pagination?.pages || 1) || Boolean(busy)} onClick={() => { const next = page + 1; setPage(next); load(filters,next,pageSize); }}>Next <ChevronRight className="h-4 w-4" /></SecondaryButton></div></div>
     </Card>
     <AuditDrawer event={selected} columns={data.columns} onClose={() => setSelected(null)} />
+    <ConfirmActionDialog open={deleteOpen} title="Delete selected audit logs?" description={`This will permanently delete ${selectedIds.length} selected audit ${selectedIds.length === 1 ? 'event' : 'events'}. Give an approved reason and type the exact confirmation phrase.`} confirmLabel="Delete selected logs" tone="danger" inputLabel="Reason for deletion" inputType="textarea" inputPlaceholder="Enter the required audit reason" required value={deleteReason} onValueChange={setDeleteReason} confirmDisabled={deleteConfirmation !== 'DELETE AUDIT LOGS'} busy={busy === 'delete'} onClose={() => { if (busy !== 'delete') { setDeleteOpen(false); setDeleteReason(''); setDeleteConfirmation(''); } }} onConfirm={purgeSelected}><label className="block text-sm font-semibold">Type DELETE AUDIT LOGS<input className={`${inputClass} mt-2`} value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} autoComplete="off" /></label></ConfirmActionDialog>
   </div>;
 }
 

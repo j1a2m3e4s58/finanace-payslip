@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArchiveRestore, ArrowDown, ArrowUp, Building2, DatabaseBackup, Download, FileCheck2, Image, Landmark, Mail, Plus, RotateCcw, Save, Send, ServerCog, Shield, TableProperties, Trash2, Upload } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { ArchiveRestore, ArrowDown, ArrowUp, Building2, DatabaseBackup, Download, FileCheck2, Image, Landmark, Mail, Plus, RotateCcw, Save, ScrollText, Send, ServerCog, Shield, TableProperties, Trash2, Upload } from 'lucide-react';
 import { downloadSecureBackup, getSecurityStatus, getSystemSettings, restoreSecureBackup, testPdfConfiguration, testSmtpConfiguration, updatePortalSettings, uploadBrandingAsset } from '@/api/portalClient';
-import { PageHeader, PrimaryButton, SecondaryButton, StatusBadge } from '@/components/payroll/PageElements';
+import { PrimaryButton, SecondaryButton, StatusBadge } from '@/components/payroll/PageElements';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/ui/use-toast';
 import ConfirmActionDialog from '@/components/ui/confirm-action-dialog';
+import AuditLogs from '@/pages/AuditLogsPage';
 
 /** @type {Array<[string, string, React.ComponentType<any>]>} */
 const TABS = [
   ['branding','Branding',Building2], ['organization','Organization',Landmark], ['import','Staff Import',TableProperties], ['payroll','Payroll',ServerCog], ['email','Email',Mail],
-  ['security','Security',Shield], ['pdf','PDF',Image], ['backup','Backup',DatabaseBackup],
+  ['security','Security',Shield], ['pdf','PDF',Image], ['backup','Backup',DatabaseBackup], ['audit','Audit Logs',ScrollText],
 ];
 const SECTION_KEYS = {
   branding: ['bankName','shortBankName','bankAddress','bankLogo','authorizedSignature','emailFooter','portalName','loginSubtitle','loginButtonText','authorizedAccessText','allowLightMode','allowDarkMode','defaultTheme'],
@@ -20,16 +22,19 @@ const SECTION_KEYS = {
   security: ['requirePrivilegedMfa','sessionTimeoutMinutes','passwordResetMinutes','restrictPayslipDownloads'],
   pdf: ['payslipTitle','confidentialityNote','pdfPasswordRule','allowanceLabels','deductionLabels','employerContributionLabels'],
   backup: ['backupSchedule','auditRetentionYears','payrollRetentionYears','deliveryRetentionYears'],
+  audit: [],
 };
 const card = 'rounded-xl border border-border bg-card p-4 sm:p-5';
 const input = 'mt-1.5 h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/25';
 const areas = 'mt-1.5 min-h-24 w-full rounded-lg border border-border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-primary/25';
 
 export default function Settings() {
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const activeTab = TABS.some(([key]) => key === requestedTab) ? requestedTab : 'branding';
   const [settings, setSettings] = useState(null);
   const [baseline, setBaseline] = useState(null);
   const [security, setSecurity] = useState(null);
-  const [activeTab, setActiveTab] = useState('branding');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [backupFile, setBackupFile] = useState(null);
@@ -104,7 +109,7 @@ export default function Settings() {
   const backup = async () => { setBusy('backup-download'); try { saveBlob(await downloadSecureBackup()); toast.success('The encrypted backup download has started.', { title: 'Backup prepared' }); } catch (err) { toast.error(err.message, { title: 'Backup failed' }); } finally { setBusy(''); } };
   const restore = async () => { setPendingDanger(null); if (!backupFile || confirmation !== 'RESTORE') return; setBusy('restore'); try { await restoreSecureBackup(await fileToBase64(backupFile),confirmation); window.location.href = '/login'; } catch (err) { setError(err.message); toast.error(err.message, { title: 'Restore failed' }); } finally { setBusy(''); } };
 
-  if (!settings || !security) return <div><PageHeader title="Portal Control" description="Loading secure platform controls…" />{error && <Banner>{error}</Banner>}</div>;
+  if (!settings || !security) return <div className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">Loading secure platform controls…{error && <Banner>{error}</Banner>}</div>;
   const tabDirty = dirtySections.includes(activeTab);
   const posture = [
     ['Password hashing',true], ['Inactivity logout',true], ['Account lockout',true],
@@ -115,13 +120,10 @@ export default function Settings() {
     ['Dedicated email worker',security.payslipWorkerMode === 'external' && security.payslipWorkerHealthy],
   ];
 
-  return <div className="max-w-7xl space-y-6">
-    <PageHeader title="Portal Control" description="Configure the platform without opening staff, payroll, payslip, delivery, report, or bank activity records." />
-    <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[.06] p-4 text-sm"><b>Privacy boundary:</b> this control plane changes system policy and appearance only. Confidential bank operations remain outside the Boss Admin account.</div>
+  return <div className={`${activeTab === 'audit' ? 'max-w-none' : 'max-w-7xl'} space-y-6`}>
+    {activeTab !== 'audit' && <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[.06] p-4 text-sm"><b>Privacy boundary:</b> Boss Admin can review and manage audit evidence here, while payroll, payslip, delivery, and other confidential bank operations remain outside this account.</div>}
     {error && <Banner>{error}</Banner>}
     {dirtySections.length > 0 && <div className="sticky top-[72px] z-30 flex flex-col gap-3 rounded-xl border border-amber-500/30 bg-amber-50 p-4 text-amber-900 shadow-sm dark:bg-amber-950/40 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between"><p className="text-sm font-semibold">Unsaved changes: {dirtySections.map(tabLabel).join(', ')}. Save each section separately before leaving.</p>{tabDirty && <PrimaryButton disabled={Boolean(busy)} onClick={() => saveSection(activeTab)}><Save className="h-4 w-4" /> Save {tabLabel(activeTab)}</PrimaryButton>}</div>}
-    <nav className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-card p-2 sm:flex sm:overflow-x-auto">{TABS.map(([key,label,Icon]) => <button key={key} onClick={() => setActiveTab(key)} className={`relative flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-lg px-3 text-xs font-semibold sm:shrink-0 sm:px-4 sm:text-sm ${activeTab === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Icon className="h-4 w-4 shrink-0" /><span className="truncate">{label}</span>{dirtySections.includes(key) && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" title="Unsaved changes" />}</button>)}</nav>
-
     {activeTab === 'branding' && <Section title="Branding" note="Bank identity, authentication wording, and appearance used throughout the platform."><div className="grid gap-4 sm:grid-cols-2"><Field label="Bank name"><Text value={settings.bankName} onChange={(value) => change('bankName',value)} /></Field><Field label="Short bank name"><Text value={settings.shortBankName} onChange={(value) => change('shortBankName',value)} /></Field><Field label="Platform name"><Text value={settings.portalName} onChange={(value) => change('portalName',value)} /></Field><Field label="Login button text"><Text value={settings.loginButtonText} onChange={(value) => change('loginButtonText',value)} /></Field></div><Field label="Login subtitle"><Text value={settings.loginSubtitle} onChange={(value) => change('loginSubtitle',value)} /></Field><Field label="Authorized access text"><Text value={settings.authorizedAccessText} onChange={(value) => change('authorizedAccessText',value)} /></Field><Field label="Bank address"><Text value={settings.bankAddress} onChange={(value) => change('bankAddress',value)} /></Field><Field label="Email footer"><textarea className={areas} value={settings.emailFooter} onChange={(event) => change('emailFooter',event.target.value)} /></Field><div className="grid gap-3 sm:grid-cols-2"><UploadBox label="Upload bank logo" current={settings.bankLogo} busy={busy === 'bankLogo'} onFile={(file) => upload(file,'bankLogo')} /><UploadBox label="Upload authorized signature" current={settings.authorizedSignature} busy={busy === 'authorizedSignature'} onFile={(file) => upload(file,'authorizedSignature')} /></div><div className="mt-4 space-y-3"><Policy label="Allow light mode" checked={settings.allowLightMode} onChange={(value) => change('allowLightMode',value)} /><Policy label="Allow dark mode" checked={settings.allowDarkMode} onChange={(value) => change('allowDarkMode',value)} /><Field label="Default theme"><select className={input} value={settings.defaultTheme} onChange={(event) => change('defaultTheme',event.target.value)}><option value="light">Light</option><option value="dark">Dark</option></select></Field></div><SaveSection name="branding" dirty={tabDirty} busy={busy} save={saveSection} /></Section>}
 
     {activeTab === 'organization' && <Section title="Organization" note="Lists used by registration, staff records, filters, and new payroll batches."><Field label="Official email domain"><Text value={settings.emailDomain} onChange={(value) => change('emailDomain',value)} /></Field><div className="grid gap-4 lg:grid-cols-2"><ListEditor label="Branches" values={settings.branches} onChange={(value) => change('branches',value)} /><ListEditor label="Departments" values={settings.departments} onChange={(value) => change('departments',value)} /></div><p className="mt-3 text-xs text-muted-foreground">Enter one item per line. Existing historical records keep their original branch and department values.</p><SaveSection name="organization" dirty={tabDirty} busy={busy} save={saveSection} /></Section>}
@@ -164,6 +166,8 @@ export default function Settings() {
     {activeTab === 'pdf' && <Section title="PDF" note="Payslip wording, contribution labels, and document password protection."><div className="grid gap-4 sm:grid-cols-2"><Field label="Payslip title"><Text value={settings.payslipTitle} onChange={(value) => change('payslipTitle',value)} /></Field><Field label="PDF password rule"><select className={input} value={settings.pdfPasswordRule} onChange={(event) => change('pdfPasswordRule',event.target.value)}><option value="staff_id">Staff ID</option><option value="phone">Phone number</option><option value="none">No password</option></select></Field></div><Field label="Confidentiality note"><Text value={settings.confidentialityNote} onChange={(value) => change('confidentialityNote',value)} /></Field><LabelEditor title="Allowance labels" values={settings.allowanceLabels} onChange={(key,value) => changeLabel('allowanceLabels',key,value)} /><LabelEditor title="Deduction labels" values={settings.deductionLabels} onChange={(key,value) => changeLabel('deductionLabels',key,value)} /><LabelEditor title="Employer contribution labels" values={settings.employerContributionLabels} onChange={(key,value) => changeLabel('employerContributionLabels',key,value)} /><div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-between"><SecondaryButton disabled={tabDirty || Boolean(busy)} onClick={testPdf}><FileCheck2 className="h-4 w-4" />{busy === 'pdf-test' ? 'Testing…' : 'Test saved PDF configuration'}</SecondaryButton><SaveSection name="pdf" dirty={tabDirty} busy={busy} save={saveSection} compact /></div>{tabDirty && <p className="mt-2 text-xs text-amber-700">Save PDF settings before running the generation test.</p>}</Section>}
 
     {activeTab === 'backup' && <><Section title="Backup policy" note="Configure backup frequency and evidence-retention periods."><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><Field label="Backup schedule"><select className={input} value={settings.backupSchedule} onChange={(event) => change('backupSchedule',event.target.value)}><option value="off">Off</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></Field><NumberField label="Audit retention (years)" value={settings.auditRetentionYears} change={(value) => change('auditRetentionYears',value)} /><NumberField label="Payroll retention (years)" value={settings.payrollRetentionYears} change={(value) => change('payrollRetentionYears',value)} /><NumberField label="Delivery log retention (years)" value={settings.deliveryRetentionYears} change={(value) => change('deliveryRetentionYears',value)} /></div><SaveSection name="backup" dirty={tabDirty} busy={busy} save={saveSection} /></Section>{settings.canManageBackups && <section className={card}><Heading icon={DatabaseBackup} title="Encrypted backup and restore" /><div className="grid gap-5 lg:grid-cols-2"><div><p className="text-sm text-muted-foreground">Manual backups are encrypted and exclude active sessions and reset tokens.</p><SecondaryButton className="mt-4" disabled={!security.backupEncryptionConfigured || Boolean(busy)} onClick={backup}><Download className="h-4 w-4" />Download secure backup</SecondaryButton></div><div><label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed p-3 text-sm"><Upload className="h-4 w-4" />{backupFile?.name || 'Choose .bcbbackup'}<input className="hidden" type="file" accept=".bcbbackup" onChange={(event) => setBackupFile(event.target.files?.[0] || null)} /></label><input className={input} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="Type RESTORE" /><button className="mt-3 rounded-lg border border-red-500/40 px-4 py-2 text-sm font-bold text-red-700 disabled:opacity-40" disabled={!backupFile || confirmation !== 'RESTORE' || Boolean(busy)} onClick={() => setPendingDanger('restore')}><ArchiveRestore className="mr-2 inline h-4 w-4" />Restore database</button></div></div></section>}</>}
+
+    {activeTab === 'audit' && <AuditLogs embedded />}
 
     <ConfirmActionDialog open={pendingDanger === 'security-save'} title="Apply security policy changes?" description="These changes can alter user access, MFA enforcement, session expiry, and payslip download rights. Confirm that the new policy is approved." confirmLabel="Apply security changes" tone="danger" busy={Boolean(busy)} onClose={() => setPendingDanger(null)} onConfirm={() => saveSection('security')} />
     <ConfirmActionDialog open={pendingDanger === 'restore'} title="Restore this database backup?" description="Restore is a high-impact operation. Current data will be replaced by the selected encrypted backup and all users will need to sign in again." confirmLabel="Restore database" tone="danger" busy={busy === 'restore'} onClose={() => setPendingDanger(null)} onConfirm={restore} />

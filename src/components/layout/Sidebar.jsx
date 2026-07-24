@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
-import { LayoutDashboard, Contact, Upload, Layers3, ClipboardCheck, FileText, Send, History, ScrollText, BarChart3, Settings, UsersRound, UserCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Contact, Upload, Layers3, ClipboardCheck, FileText, Send, History, ScrollText, BarChart3, Settings, UsersRound, UserCircle, ChevronLeft, ChevronRight, Building2, Landmark, TableProperties, ServerCog, Mail, Shield, Image, DatabaseBackup } from 'lucide-react';
 import { resolveAssetUrl } from '@/api/portalClient';
 
 export const navItems = [
@@ -20,6 +20,18 @@ export const navItems = [
   { label: 'My Profile', path: '/profile', icon: UserCircle, group: 'Administration', permission: 'profile.view', desktopHidden: true },
 ];
 
+const bossAdminItems = [
+  { label: 'Branding', path: '/portal-control?tab=branding', tab: 'branding', icon: Building2, group: 'Portal Controls' },
+  { label: 'Organization', path: '/portal-control?tab=organization', tab: 'organization', icon: Landmark, group: 'Portal Controls' },
+  { label: 'Staff Import', path: '/portal-control?tab=import', tab: 'import', icon: TableProperties, group: 'Portal Controls' },
+  { label: 'Payroll', path: '/portal-control?tab=payroll', tab: 'payroll', icon: ServerCog, group: 'Portal Controls' },
+  { label: 'Email', path: '/portal-control?tab=email', tab: 'email', icon: Mail, group: 'Portal Controls' },
+  { label: 'Security', path: '/portal-control?tab=security', tab: 'security', icon: Shield, group: 'Portal Controls' },
+  { label: 'PDF', path: '/portal-control?tab=pdf', tab: 'pdf', icon: Image, group: 'Portal Controls' },
+  { label: 'Backup', path: '/portal-control?tab=backup', tab: 'backup', icon: DatabaseBackup, group: 'Portal Controls' },
+  { label: 'Audit Logs', path: '/portal-control?tab=audit', tab: 'audit', icon: ScrollText, group: 'Portal Controls' },
+];
+
 const healthPresentation = {
   checking: { label: 'Checking system status', dot: 'bg-slate-400', panel: 'bg-slate-500/10', text: 'text-muted-foreground' },
   online: { label: 'Finance system online', dot: 'bg-emerald-500', panel: 'bg-emerald-500/10', text: 'text-emerald-700 dark:text-emerald-400' },
@@ -29,8 +41,11 @@ const healthPresentation = {
 
 export default function Sidebar({ isOpen, onClose, collapsed = true, onToggleCollapsed, systemHealth }) {
   const location = useLocation();
-  const { can, portalSettings } = useAuth();
-  const visible = navItems.filter((item) => can(item.permission) && !item.desktopHidden);
+  const { can, portalSettings, user } = useAuth();
+  const currentBossTab = new URLSearchParams(location.search).get('tab') || 'branding';
+  const visible = user?.role === 'BossAdmin'
+    ? bossAdminItems
+    : navItems.filter((item) => can(item.permission) && !item.desktopHidden);
   const groups = [...new Set(visible.map((item) => item.group))];
   const health = healthPresentation[systemHealth?.status] || healthPresentation.checking;
   const healthTitle = `${health.label}${systemHealth?.pending ? ` · ${systemHealth.pending} queued` : ''}`;
@@ -44,7 +59,7 @@ export default function Sidebar({ isOpen, onClose, collapsed = true, onToggleCol
         <img src={resolveAssetUrl(portalSettings?.bankLogo || '/assets/images/bcb-logo.png')} alt={portalSettings?.bankName || 'Bawjiase Community Bank'} className="h-11 w-11 rounded-full bg-white object-contain p-0.5" />
         <div className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}><h1 className="truncate font-heading text-sm font-bold text-foreground">{portalSettings?.bankName || 'Bawjiase Community Bank'}</h1><p className="text-[11px] font-medium text-muted-foreground">{portalSettings?.portalName || 'Finance Payslip Platform'}</p></div>
       </Link>
-      <nav className={`flex-1 overflow-y-auto p-3 ${collapsed ? 'lg:px-2' : ''}`}>{groups.map((group) => <div key={group} className="mb-4"><p className={`mb-1 px-3 text-[9px] font-bold uppercase tracking-[.22em] text-muted-foreground/70 ${collapsed ? 'lg:hidden' : ''}`}>{group}</p><div className="space-y-1">{visible.filter((item) => item.group === group).map((item) => { const Icon = item.icon; const active = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(`${item.path}/`)); return <Link key={item.path} to={item.path} onClick={onClose} title={collapsed ? item.label : undefined} aria-label={collapsed ? item.label : undefined} className={`flex min-h-11 items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${collapsed ? 'lg:justify-center lg:px-2' : ''} ${active ? 'bg-primary text-primary-foreground shadow-md shadow-primary/15' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground'}`}><Icon className="h-4 w-4 shrink-0" /><span className={collapsed ? 'lg:hidden' : ''}>{item.label}</span></Link>; })}</div></div>)}</nav>
+      <nav className={`flex-1 overflow-y-auto p-3 ${collapsed ? 'lg:px-2' : ''}`}>{groups.map((group) => <div key={group} className="mb-4"><p className={`mb-1 px-3 text-[9px] font-bold uppercase tracking-[.22em] text-muted-foreground/70 ${collapsed ? 'lg:hidden' : ''}`}>{group}</p><div className="space-y-1">{visible.filter((item) => item.group === group).map((item) => { const Icon = item.icon; const active = item.tab ? location.pathname === '/portal-control' && currentBossTab === item.tab : location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(`${item.path}/`)); return <Link key={item.path} to={item.path} onClick={onClose} title={collapsed ? item.label : undefined} aria-label={collapsed ? item.label : undefined} className={`flex min-h-11 items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${collapsed ? 'lg:justify-center lg:px-2' : ''} ${active ? 'bg-primary text-primary-foreground shadow-md shadow-primary/15' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground'}`}><Icon className="h-4 w-4 shrink-0" /><span className={collapsed ? 'lg:hidden' : ''}>{item.label}</span></Link>; })}</div></div>)}</nav>
       <div className={`border-t border-sidebar-border p-4 ${collapsed ? 'lg:px-2' : ''}`}><button type="button" onClick={systemHealth?.refresh} title={healthTitle} aria-label={`${healthTitle}. Refresh system status`} className={`flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition hover:brightness-95 ${health.panel} ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}><span className={`h-2.5 w-2.5 shrink-0 rounded-full ${health.dot} ${systemHealth?.status === 'checking' ? 'animate-pulse motion-reduce:animate-none' : ''}`} /><span aria-live="polite" className={`text-xs font-semibold ${health.text} ${collapsed ? 'lg:hidden' : ''}`}>{health.label}</span></button></div>
     </aside>
   </>;

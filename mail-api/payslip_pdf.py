@@ -32,7 +32,6 @@ INCOME_ROWS = [
     ("Entertainment Allowance", "entertainmentAllowance"),
     ("Fuel / Transport Allowance", "fuelTransportAllowance"),
     ("Rent / Utility Allowance", "rentUtilityAllowance"),
-    ("Other Allowances", "otherAllowances"),
 ]
 
 DEDUCTION_ROWS = [
@@ -42,8 +41,6 @@ DEDUCTION_ROWS = [
     ("P.A.Y.E Income Tax", "payeIncomeTax"),
     ("Staff Welfare", "staffWelfare"),
     ("ICU Dues", "icuDues"),
-    ("Loans", "loans"),
-    ("Other Deductions", "otherDeductions"),
 ]
 
 
