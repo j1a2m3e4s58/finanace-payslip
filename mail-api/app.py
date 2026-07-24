@@ -54,6 +54,7 @@ PAYROLL_BATCHES_STORE_PATH = os.path.join(DATA_DIR, "payroll_batches_store.json"
 SALARY_HISTORY_STORE_PATH = os.path.join(DATA_DIR, "salary_history_store.json")
 EMAIL_DELIVERY_STORE_PATH = os.path.join(DATA_DIR, "email_delivery_store.json")
 PORTAL_SETTINGS_STORE_PATH = os.path.join(DATA_DIR, "portal_settings_store.json")
+PAYROLL_SETUP_STORE_PATH = os.path.join(DATA_DIR, "payroll_setup_store.json")
 WORKER_STATUS_STORE_PATH = os.path.join(DATA_DIR, "worker_status_store.json")
 UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
 PRESENCE_TTL_SECONDS = 20
@@ -127,7 +128,7 @@ DEFAULT_PORTAL_SETTINGS = {
         "fuelTransportAllowance": "Fuel / Transport Allowance", "rentUtilityAllowance": "Rent / Utility Allowance",
     },
     "deductionLabels": {
-        "ssf": "5.5% SSF", "esp": "4.5% ESP", "pf": "4.5% PF", "payeIncomeTax": "P.A.Y.E Income Tax",
+        "ssf": "5.5% SSF", "pf": "9% PF", "payeIncomeTax": "P.A.Y.E Income Tax",
         "staffWelfare": "Staff Welfare", "icuDues": "ICU Dues",
     },
     "employerContributionLabels": {"employerSsf": "Employer SSF", "employerPf": "Employer PF"},
@@ -139,8 +140,7 @@ DEFAULT_PORTAL_SETTINGS = {
     "payrollApprovalRequired": True,
     "contributionRates": {
         "employeeSsf": 5.5,
-        "employeeEsp": 4.5,
-        "employeePf": 4.5,
+        "employeePf": 9.0,
         "employerSsf": 13.0,
         "employerPf": 5.0,
     },
@@ -234,6 +234,7 @@ STORE_DEFAULTS: dict[str, object] = {
     SALARY_HISTORY_STORE_PATH: [],
     EMAIL_DELIVERY_STORE_PATH: [],
     PORTAL_SETTINGS_STORE_PATH: {},
+    PAYROLL_SETUP_STORE_PATH: {},
     WORKER_STATUS_STORE_PATH: {},
     LOGIN_ATTEMPTS_STORE_PATH: {},
     RATE_LIMIT_STORE_PATH: {},
@@ -1070,6 +1071,7 @@ def save_reset_tokens(store: dict[str, dict]) -> None:
 
 SENSITIVE_STORE_FIELDS = {
     os.path.abspath(PAYROLL_BATCHES_STORE_PATH): {"basicSalary", "supervisionAllowance", "riskAllowance", "responsibilityAllowance", "entertainmentAllowance", "fuelTransportAllowance", "rentUtilityAllowance", "otherAllowances", "payeIncomeTax", "staffWelfare", "icuDues", "loans", "otherDeductions", "ssf", "esp", "pf", "totalIncome", "totalDeductions", "netSalary", "employerSsf", "employerPf", "email"},
+    os.path.abspath(PAYROLL_SETUP_STORE_PATH): {"basicSalary", "supervisionAllowance", "riskAllowance", "responsibilityAllowance", "entertainmentAllowance", "fuelTransportAllowance", "rentUtilityAllowance", "payeIncomeTax", "staffWelfare", "icuDues"},
     os.path.abspath(SALARY_HISTORY_STORE_PATH): {"oldValue", "newValue"},
     os.path.abspath(EMAIL_DELIVERY_STORE_PATH): {"recipientEmail", "errorMessage"},
 }
@@ -1327,10 +1329,19 @@ def normalize_effective_month(value: object, fallback: str = "2000-01") -> str:
 def normalize_contribution_rates(value: object) -> dict[str, float]:
     incoming = value if isinstance(value, dict) else {}
     fallback = DEFAULT_PORTAL_SETTINGS["contributionRates"]
-    return {
+    normalized = {
         key: normalize_percentage(incoming.get(key), default)
         for key, default in fallback.items()
     }
+    # Older batches stored ESP and PF separately at 4.5% each. They now form
+    # one statutory PF deduction, while historical snapshots remain readable.
+    if "employeeEsp" in incoming:
+        try:
+            combined_pf = float(incoming.get("employeePf") or 0) + float(incoming.get("employeeEsp") or 0)
+        except (TypeError, ValueError):
+            combined_pf = fallback["employeePf"]
+        normalized["employeePf"] = normalize_percentage(combined_pf, fallback["employeePf"])
+    return normalized
 
 
 def normalize_payroll_validation_rules(value: object) -> dict[str, float]:
@@ -3067,7 +3078,7 @@ def build_backup_payload(generated_by: dict | None = None) -> dict:
             "app": "bawjiase-finance-payslip-platform",
             "generatedAt": now_ms(),
             "generatedBy": generated_by or {"id": "system", "fullname": "Scheduled Backup", "role": "system"},
-            "schemaVersion": 3,
+            "schemaVersion": 4,
         },
         "stores": {
             "users": load_user_store(),
@@ -3079,6 +3090,7 @@ def build_backup_payload(generated_by: dict | None = None) -> dict:
             "salaryHistory": load_json_list_store(SALARY_HISTORY_STORE_PATH),
             "emailDelivery": load_json_list_store(EMAIL_DELIVERY_STORE_PATH),
             "portalSettings": load_portal_settings_store(),
+            "payrollSetup": load_payroll_setup_store(),
             "mfa": load_mfa_store(),
         },
     }
@@ -3224,7 +3236,7 @@ def restore_production_backup():
         return jsonify({"error": "Backup is invalid, corrupted, or encrypted with a different key"}), 400
     metadata, stores = backup.get("metadata", {}), backup.get("stores", {})
     required = {"users", "passwords", "staffRecords", "payrollBatches", "salaryHistory", "auditLogs", "portalSettings"}
-    if metadata.get("app") != "bawjiase-finance-payslip-platform" or int(metadata.get("schemaVersion", 0)) not in {2, 3} or not required.issubset(stores):
+    if metadata.get("app") != "bawjiase-finance-payslip-platform" or int(metadata.get("schemaVersion", 0)) not in {2, 3, 4} or not required.issubset(stores):
         return jsonify({"error": "Backup schema is not supported"}), 400
     if not all(isinstance(stores.get(key), list) for key in ["users", "staffRecords", "payrollBatches", "salaryHistory", "auditLogs"]):
         return jsonify({"error": "Backup data structure is invalid"}), 400
@@ -3238,6 +3250,7 @@ def restore_production_backup():
     save_json_list_store(EMAIL_DELIVERY_STORE_PATH, stores.get("emailDelivery", []))
     save_audit_logs_store(stores["auditLogs"])
     save_portal_settings_store(stores["portalSettings"])
+    save_payroll_setup_store(stores.get("payrollSetup", default_payroll_setup()))
     save_json_list_store(NOTIFICATIONS_STORE_PATH, stores.get("notifications", []))
     if isinstance(stores.get("mfa"), dict):
         save_mfa_store(stores["mfa"])
@@ -3560,18 +3573,121 @@ PAYROLL_INCOME_FIELDS = [
 PAYROLL_MANUAL_DEDUCTION_FIELDS = ["payeIncomeTax", "staffWelfare", "icuDues"]
 PAYROLL_MANUAL_FIELDS = PAYROLL_INCOME_FIELDS + PAYROLL_MANUAL_DEDUCTION_FIELDS
 PAYROLL_TRACKED_FIELDS = PAYROLL_MANUAL_FIELDS + [
-    "ssf", "esp", "pf", "totalIncome", "totalDeductions", "netSalary", "employerSsf", "employerPf",
+    "ssf", "pf", "totalIncome", "totalDeductions", "netSalary", "employerSsf", "employerPf",
 ]
 PAYROLL_FIELD_LABELS = {
     "basicSalary": "Basic Salary", "supervisionAllowance": "Supervision Allowance",
     "riskAllowance": "Risk Allowance", "responsibilityAllowance": "Responsibility Allowance",
     "entertainmentAllowance": "Entertainment Allowance", "fuelTransportAllowance": "Fuel/Transport Allowance",
     "rentUtilityAllowance": "Rent/Utility Allowance",
-    "ssf": "5.5% SSF", "esp": "4.5% ESP", "pf": "4.5% PF", "payeIncomeTax": "P.A.Y.E Income Tax",
+    "ssf": "5.5% SSF", "pf": "9% PF", "payeIncomeTax": "P.A.Y.E Income Tax",
     "staffWelfare": "Staff Welfare", "icuDues": "ICU Dues", "totalIncome": "Total Income",
     "totalDeductions": "Total Deductions", "netSalary": "Net Salary",
     "employerSsf": "Employer SSF", "employerPf": "Employer PF",
 }
+PAYROLL_GLOBAL_SETUP_FIELDS = [
+    "supervisionAllowance", "riskAllowance", "responsibilityAllowance",
+    "entertainmentAllowance", "fuelTransportAllowance", "rentUtilityAllowance",
+    "staffWelfare", "icuDues",
+]
+PAYROLL_STAFF_SETUP_FIELDS = ["basicSalary", *PAYROLL_GLOBAL_SETUP_FIELDS, "payeIncomeTax"]
+
+
+def normalize_optional_setup_amount(value: object, field: str) -> float | None:
+    if value is None or str(value).strip() == "":
+        return None
+    maximum = 100_000_000 if field == "basicSalary" else 10_000_000
+    return payroll_number(value, field, allow_empty=True, maximum=maximum)
+
+
+def default_payroll_setup() -> dict:
+    return {
+        "version": 1,
+        "configured": False,
+        "locked": False,
+        "effectiveMonth": datetime.now().strftime("%Y-%m"),
+        "globalValues": {field: None for field in PAYROLL_GLOBAL_SETUP_FIELDS},
+        "staffOverrides": [],
+        "updatedAt": 0,
+        "updatedBy": "",
+        "lockReason": "",
+        "history": [],
+    }
+
+
+def normalize_payroll_setup(raw: object) -> dict:
+    incoming = raw if isinstance(raw, dict) else {}
+    defaults = default_payroll_setup()
+    global_values = incoming.get("globalValues") if isinstance(incoming.get("globalValues"), dict) else {}
+    overrides = []
+    for item in incoming.get("staffOverrides", []) if isinstance(incoming.get("staffOverrides"), list) else []:
+        if not isinstance(item, dict) or not str(item.get("staffRecordId", "")).strip():
+            continue
+        values = item.get("values") if isinstance(item.get("values"), dict) else {}
+        try:
+            normalized_values = {
+                field: normalize_optional_setup_amount(values.get(field), field)
+                for field in PAYROLL_STAFF_SETUP_FIELDS
+            }
+        except ValueError:
+            continue
+        if not any(value is not None for value in normalized_values.values()):
+            continue
+        overrides.append({
+            "staffRecordId": str(item.get("staffRecordId")).strip(),
+            "values": normalized_values,
+            "reason": str(item.get("reason") or "").strip()[:500],
+            "updatedAt": int(item.get("updatedAt", 0) or 0),
+            "updatedBy": str(item.get("updatedBy") or ""),
+        })
+    return {
+        **defaults,
+        "version": max(1, int(incoming.get("version", 1) or 1)),
+        "configured": bool(incoming.get("configured", False)),
+        "locked": bool(incoming.get("locked", False)),
+        "effectiveMonth": normalize_effective_month(incoming.get("effectiveMonth"), defaults["effectiveMonth"]),
+        "globalValues": {
+            field: normalize_optional_setup_amount(global_values.get(field), field)
+            for field in PAYROLL_GLOBAL_SETUP_FIELDS
+        },
+        "staffOverrides": overrides,
+        "updatedAt": int(incoming.get("updatedAt", 0) or 0),
+        "updatedBy": str(incoming.get("updatedBy") or ""),
+        "lockReason": str(incoming.get("lockReason") or "")[:500],
+        "history": list(incoming.get("history") or [])[-100:],
+    }
+
+
+def load_payroll_setup_store() -> dict:
+    raw = read_json_file(PAYROLL_SETUP_STORE_PATH, {})
+    fields = SENSITIVE_STORE_FIELDS[os.path.abspath(PAYROLL_SETUP_STORE_PATH)]
+    if fields:
+        raw = transform_sensitive_values(raw, fields, False)
+    return normalize_payroll_setup(raw)
+
+
+def save_payroll_setup_store(setup: dict) -> None:
+    normalized = normalize_payroll_setup(setup)
+    fields = SENSITIVE_STORE_FIELDS[os.path.abspath(PAYROLL_SETUP_STORE_PATH)]
+    payload = transform_sensitive_values(normalized, fields, True) if data_fernet() else normalized
+    atomic_write_json(PAYROLL_SETUP_STORE_PATH, payload)
+
+
+def apply_setup_values(payload: dict, setup: dict, staff_record_id: object) -> dict:
+    prepared = dict(payload)
+    if not setup.get("configured"):
+        return prepared
+    for field, value in setup.get("globalValues", {}).items():
+        if field in PAYROLL_GLOBAL_SETUP_FIELDS and value is not None:
+            prepared[field] = value
+    override = next(
+        (item for item in setup.get("staffOverrides", []) if str(item.get("staffRecordId")) == str(staff_record_id)),
+        None,
+    )
+    for field, value in (override or {}).get("values", {}).items():
+        if field in PAYROLL_STAFF_SETUP_FIELDS and value is not None:
+            prepared[field] = value
+    return prepared
 
 
 def payroll_number(value: object, field_name: str, allow_empty: bool = True, maximum: float = 1_000_000) -> float | None:
@@ -3612,12 +3728,11 @@ def calculate_payroll_entry(
         entry[field] = payroll_number(data.get(field, current.get(field)), field, maximum=maximum)
     basic = float(entry.get("basicSalary") or 0)
     entry["ssf"] = round(basic * rates["employeeSsf"] / 100, 2)
-    entry["esp"] = round(basic * rates["employeeEsp"] / 100, 2)
     entry["pf"] = round(basic * rates["employeePf"] / 100, 2)
     entry["employerSsf"] = round(basic * rates["employerSsf"] / 100, 2)
     entry["employerPf"] = round(basic * rates["employerPf"] / 100, 2)
     entry["totalIncome"] = round(sum(float(entry.get(field) or 0) for field in PAYROLL_INCOME_FIELDS), 2)
-    entry["totalDeductions"] = round(entry["ssf"] + entry["esp"] + entry["pf"] + sum(float(entry.get(field) or 0) for field in PAYROLL_MANUAL_DEDUCTION_FIELDS), 2)
+    entry["totalDeductions"] = round(entry["ssf"] + entry["pf"] + sum(float(entry.get(field) or 0) for field in PAYROLL_MANUAL_DEDUCTION_FIELDS), 2)
     entry["netSalary"] = round(entry["totalIncome"] - entry["totalDeductions"], 2)
     return entry
 
@@ -3730,6 +3845,253 @@ def payroll_entry_changes(entry: dict, baseline: dict | None) -> list[dict]:
     return changes
 
 
+def apply_setup_to_editable_batches(setup: dict, reason: str) -> tuple[int, int]:
+    batches = load_json_list_store(PAYROLL_BATCHES_STORE_PATH)
+    updated_batches = 0
+    updated_entries = 0
+    for batch in batches:
+        if batch.get("status") not in {"draft", "rejected", "corrected"}:
+            continue
+        if str(batch.get("period", "")) < str(setup.get("effectiveMonth", "")):
+            continue
+        baseline_by_staff = {
+            item.get("staffRecordId"): item for item in batch.get("baselineEntries", [])
+        }
+        next_entries = []
+        batch_changed = False
+        for current in batch.get("entries", []):
+            prepared = apply_setup_values(current, setup, current.get("staffRecordId"))
+            calculated = calculate_payroll_entry(
+                prepared,
+                current,
+                contribution_rates=batch.get("contributionRates"),
+                validation_rules=batch.get("payrollValidationRules"),
+            )
+            changed = payroll_entry_changes(calculated, current)
+            if changed:
+                batch_changed = True
+                updated_entries += 1
+                calculated["changeReason"] = reason
+            else:
+                calculated["changeReason"] = current.get("changeReason", "")
+            next_entries.append(calculated)
+        if not batch_changed:
+            continue
+        batch["entries"] = next_entries
+        batch["summary"] = payroll_batch_summary(next_entries)
+        batch["payrollSetupVersion"] = setup.get("version")
+        batch["payrollSetupEffectiveMonth"] = setup.get("effectiveMonth")
+        batch["pendingChangeCount"] = sum(
+            len(payroll_entry_changes(item, baseline_by_staff.get(item.get("staffRecordId"))))
+            for item in next_entries
+        )
+        batch["requiresChangeApproval"] = batch["pendingChangeCount"] > 0
+        batch["updatedAt"] = now_ms()
+        batch.setdefault("approvalHistory", []).append({
+            "id": f"setup-{now_ms()}-{secrets.randbelow(100000):05d}",
+            "action": "salary_allowance_setup_applied",
+            "actorId": "system",
+            "actorName": "Payroll Setup",
+            "actorRole": "System",
+            "timestamp": now_ms(),
+            "comments": reason,
+        })
+        updated_batches += 1
+    if updated_batches:
+        save_json_list_store(PAYROLL_BATCHES_STORE_PATH, batches)
+    return updated_batches, updated_entries
+
+
+def payroll_setup_response(setup: dict) -> dict:
+    staff = [
+        {
+            "id": item.get("id"),
+            "staffId": item.get("staffId"),
+            "fullName": item.get("fullName"),
+            "department": item.get("department"),
+            "branch": item.get("branch"),
+            "employmentStatus": item.get("employmentStatus"),
+        }
+        for item in load_json_list_store(STAFF_RECORDS_STORE_PATH)
+        if item.get("employmentStatus") == "active"
+    ]
+    staff.sort(key=lambda item: str(item.get("fullName", "")))
+    return {
+        "setup": setup,
+        "staff": staff,
+        "globalFields": [
+            {"key": field, "label": PAYROLL_FIELD_LABELS[field]}
+            for field in PAYROLL_GLOBAL_SETUP_FIELDS
+        ],
+        "staffFields": [
+            {"key": field, "label": PAYROLL_FIELD_LABELS[field]}
+            for field in PAYROLL_STAFF_SETUP_FIELDS
+        ],
+    }
+
+
+@app.route("/api/payroll-setup", methods=["GET"])
+def get_payroll_setup():
+    _, _, error = require_payroll_preparer()
+    if error:
+        return error
+    return jsonify(payroll_setup_response(load_payroll_setup_store()))
+
+
+@app.route("/api/payroll-setup", methods=["POST", "OPTIONS"])
+def update_payroll_setup():
+    preflight = handle_options()
+    if preflight:
+        return preflight
+    _, auth_user, error = require_payroll_preparer()
+    if error:
+        return error
+    current = load_payroll_setup_store()
+    if current.get("locked"):
+        return jsonify({"error": "Salary and allowance setup is locked. Unlock it before making changes."}), 409
+    data, error = require_json()
+    if error:
+        return error
+    reason = str(data.get("reason") or "").strip()
+    if len(reason) < 5 or len(reason) > 500:
+        return jsonify({"error": "Provide an approved change reason between 5 and 500 characters"}), 400
+    effective_month = normalize_effective_month(data.get("effectiveMonth"), "")
+    if not effective_month:
+        return jsonify({"error": "Select the month when these values take effect"}), 400
+    incoming_global = data.get("globalValues")
+    if not isinstance(incoming_global, dict):
+        return jsonify({"error": "Bank-wide allowance values are required"}), 400
+    try:
+        global_values = {
+            field: normalize_optional_setup_amount(incoming_global.get(field), field)
+            for field in PAYROLL_GLOBAL_SETUP_FIELDS
+        }
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    active_staff = {
+        str(item.get("id")): item
+        for item in load_json_list_store(STAFF_RECORDS_STORE_PATH)
+        if item.get("employmentStatus") == "active"
+    }
+    raw_overrides = data.get("staffOverrides", [])
+    if not isinstance(raw_overrides, list):
+        return jsonify({"error": "Staff-specific values must be a list"}), 400
+    overrides = []
+    seen_staff = set()
+    try:
+        for item in raw_overrides:
+            if not isinstance(item, dict):
+                raise ValueError("Each staff-specific entry must be a record")
+            staff_record_id = str(item.get("staffRecordId") or "").strip()
+            if staff_record_id not in active_staff:
+                raise ValueError("A selected staff member is no longer active")
+            if staff_record_id in seen_staff:
+                raise ValueError("A staff member can have only one override")
+            values = item.get("values") if isinstance(item.get("values"), dict) else {}
+            normalized_values = {
+                field: normalize_optional_setup_amount(values.get(field), field)
+                for field in PAYROLL_STAFF_SETUP_FIELDS
+            }
+            if not any(value is not None for value in normalized_values.values()):
+                continue
+            override_reason = str(item.get("reason") or "").strip()
+            if len(override_reason) < 5:
+                raise ValueError(f"Provide a reason for {active_staff[staff_record_id].get('fullName')}")
+            overrides.append({
+                "staffRecordId": staff_record_id,
+                "values": normalized_values,
+                "reason": override_reason[:500],
+                "updatedAt": now_ms(),
+                "updatedBy": auth_user.get("fullname"),
+            })
+            seen_staff.add(staff_record_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    timestamp = now_ms()
+    setup = {
+        **current,
+        "version": int(current.get("version", 1) or 1) + 1,
+        "configured": True,
+        "effectiveMonth": effective_month,
+        "globalValues": global_values,
+        "staffOverrides": overrides,
+        "updatedAt": timestamp,
+        "updatedBy": auth_user.get("fullname"),
+        "history": [
+            *list(current.get("history") or []),
+            {
+                "id": f"setup-history-{timestamp}",
+                "action": "updated",
+                "actorName": auth_user.get("fullname"),
+                "timestamp": timestamp,
+                "effectiveMonth": effective_month,
+                "reason": reason,
+                "staffOverrideCount": len(overrides),
+            },
+        ][-100:],
+    }
+    save_payroll_setup_store(setup)
+    updated_batches, updated_entries = apply_setup_to_editable_batches(setup, reason)
+    record_audit_log(auth_user, "UPDATE_SALARY_ALLOWANCE_SETUP", {
+        "effectiveMonth": effective_month,
+        "staffOverrideCount": len(overrides),
+        "updatedBatches": updated_batches,
+        "updatedStaffEntries": updated_entries,
+        "reason": reason,
+        "oldValue": current.get("globalValues"),
+        "newValue": global_values,
+    })
+    return jsonify({
+        **payroll_setup_response(setup),
+        "updatedBatches": updated_batches,
+        "updatedStaffEntries": updated_entries,
+    })
+
+
+@app.route("/api/payroll-setup/lock", methods=["POST", "OPTIONS"])
+def change_payroll_setup_lock():
+    preflight = handle_options()
+    if preflight:
+        return preflight
+    _, auth_user, error = require_payroll_preparer()
+    if error:
+        return error
+    data, error = require_json()
+    if error:
+        return error
+    locked = bool(data.get("locked"))
+    reason = str(data.get("reason") or "").strip()
+    if len(reason) < 5 or len(reason) > 500:
+        return jsonify({"error": "Provide an approved lock or unlock reason between 5 and 500 characters"}), 400
+    setup = load_payroll_setup_store()
+    if locked and not setup.get("configured"):
+        return jsonify({"error": "Save the salary and allowance setup before locking it"}), 409
+    if bool(setup.get("locked")) == locked:
+        return jsonify({"error": f"Salary and allowance setup is already {'locked' if locked else 'unlocked'}"}), 409
+    timestamp = now_ms()
+    setup["locked"] = locked
+    setup["lockReason"] = reason
+    setup["updatedAt"] = timestamp
+    setup["updatedBy"] = auth_user.get("fullname")
+    setup["history"] = [
+        *list(setup.get("history") or []),
+        {
+            "id": f"setup-lock-{timestamp}",
+            "action": "locked" if locked else "unlocked",
+            "actorName": auth_user.get("fullname"),
+            "timestamp": timestamp,
+            "effectiveMonth": setup.get("effectiveMonth"),
+            "reason": reason,
+        },
+    ][-100:]
+    save_payroll_setup_store(setup)
+    record_audit_log(auth_user, "LOCK_SALARY_ALLOWANCE_SETUP" if locked else "UNLOCK_SALARY_ALLOWANCE_SETUP", {
+        "effectiveMonth": setup.get("effectiveMonth"),
+        "reason": reason,
+    })
+    return jsonify(payroll_setup_response(setup))
+
+
 def payroll_baseline(entries: list[dict]) -> list[dict]:
     return [{key: item.get(key) for key in ["staffRecordId", "staffId", "fullName", *PAYROLL_TRACKED_FIELDS]} for item in entries]
 
@@ -3775,6 +4137,8 @@ def create_payroll_batch():
     rate_profile = contribution_rate_profile_for_period(period, portal_settings)
     contribution_rates = rate_profile["rates"]
     validation_rules = normalize_payroll_validation_rules(portal_settings.get("payrollValidationRules"))
+    payroll_setup = load_payroll_setup_store()
+    setup_applies = payroll_setup.get("configured") and payroll_setup.get("effectiveMonth", "") <= period
     source_entries = {str(item.get("staffId", "")).lower(): item for item in (source.get("entries", []) if source else [])}
     entries = []
     baselines = []
@@ -3785,6 +4149,8 @@ def create_payroll_batch():
             "email": item.get("email"), "department": item.get("department"), "branch": item.get("branch"),
             **{field: previous.get(field) for field in PAYROLL_MANUAL_FIELDS},
         }
+        if setup_applies:
+            payload = apply_setup_values(payload, payroll_setup, item.get("id"))
         calculated = calculate_payroll_entry(payload, contribution_rates=contribution_rates, validation_rules=validation_rules)
         if previous:
             baseline = {
@@ -3808,6 +4174,8 @@ def create_payroll_batch():
         "contributionRates": contribution_rates,
         "contributionRateEffectiveMonth": rate_profile["effectiveMonth"],
         "payrollValidationRules": validation_rules,
+        "payrollSetupVersion": payroll_setup.get("version") if setup_applies else None,
+        "payrollSetupEffectiveMonth": payroll_setup.get("effectiveMonth") if setup_applies else None,
         "emailDomain": portal_settings["emailDomain"],
         "requiresChangeApproval": False, "pendingChangeCount": 0,
         "createdBy": auth_user.get("fullname"), "createdById": auth_user.get("id"),
@@ -4183,7 +4551,6 @@ def payslip_pdf_settings_for_batch(batch: dict) -> tuple[dict, str]:
     settings["deductionLabels"] = {
         **dict(settings.get("deductionLabels") or {}),
         "ssf": f"{rates['employeeSsf']:g}% SSF",
-        "esp": f"{rates['employeeEsp']:g}% ESP",
         "pf": f"{rates['employeePf']:g}% PF",
     }
     settings["employerContributionLabels"] = {

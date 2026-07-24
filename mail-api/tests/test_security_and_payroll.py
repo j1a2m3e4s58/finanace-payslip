@@ -26,8 +26,8 @@ def test_payroll_calculations_are_server_side():
     payload.update({"basicSalary": 1000, "staffId": "BCB-001", "fullName": "Test Staff"})
     result = portal.calculate_payroll_entry(payload)
     assert result["ssf"] == 55
-    assert result["esp"] == 45
-    assert result["pf"] == 45
+    assert "esp" not in result
+    assert result["pf"] == 90
     assert result["employerSsf"] == 130
     assert result["netSalary"] == 855
 
@@ -38,8 +38,8 @@ def test_payroll_calculations_use_configured_rate_snapshot():
     rates = {"employeeSsf": 6, "employeeEsp": 3, "employeePf": 2, "employerSsf": 14, "employerPf": 7}
     result = portal.calculate_payroll_entry(payload, contribution_rates=rates)
     assert result["ssf"] == 120
-    assert result["esp"] == 60
-    assert result["pf"] == 40
+    assert "esp" not in result
+    assert result["pf"] == 100
     assert result["employerSsf"] == 280
     assert result["employerPf"] == 140
     assert result["netSalary"] == 1780
@@ -72,6 +72,8 @@ def test_removed_template_fields_are_ignored_by_payroll_and_pdf():
     assert "Other Allowances" not in text
     assert "Loans" not in text
     assert "Other Deductions" not in text
+    assert "ESP" not in text
+    assert "9% PF" in text
 
 
 def test_rate_history_selects_profile_by_payroll_month():
@@ -85,6 +87,67 @@ def test_rate_history_selects_profile_by_payroll_month():
     }
     assert portal.contribution_rate_profile_for_period("2026-12", settings)["rates"]["employeeSsf"] == 5.5
     assert portal.contribution_rate_profile_for_period("2027-01", settings)["rates"]["employeeSsf"] == 7
+
+
+def test_legacy_esp_and_pf_rates_are_migrated_to_one_pf_rate():
+    rates = portal.normalize_contribution_rates({
+        "employeeSsf": 5.5,
+        "employeeEsp": 4.5,
+        "employeePf": 4.5,
+        "employerSsf": 13,
+        "employerPf": 5,
+    })
+    assert "employeeEsp" not in rates
+    assert rates["employeePf"] == 9
+
+
+def test_payroll_setup_applies_global_values_then_staff_override():
+    setup = portal.normalize_payroll_setup({
+        "configured": True,
+        "effectiveMonth": "2026-08",
+        "globalValues": {"riskAllowance": 250, "staffWelfare": 20},
+        "staffOverrides": [{
+            "staffRecordId": "staff-1",
+            "values": {"basicSalary": 3000, "riskAllowance": 400},
+            "reason": "Promotion adjustment",
+        }],
+    })
+    prepared = portal.apply_setup_values(
+        {"basicSalary": 2000, "riskAllowance": 0, "staffWelfare": 0},
+        setup,
+        "staff-1",
+    )
+    assert prepared["basicSalary"] == 3000
+    assert prepared["riskAllowance"] == 400
+    assert prepared["staffWelfare"] == 20
+
+
+def test_payroll_setup_updates_only_editable_batches(monkeypatch):
+    base = {field: 0 for field in portal.PAYROLL_MANUAL_FIELDS}
+    base.update({"staffRecordId": "staff-1", "staffId": "BCB-001", "fullName": "Test Staff", "basicSalary": 1000})
+    entry = portal.calculate_payroll_entry(base)
+    draft = {
+        "id": "draft-1", "period": "2026-08", "status": "draft",
+        "entries": [entry], "baselineEntries": [portal.payroll_baseline([entry])[0]],
+        "contributionRates": portal.normalize_contribution_rates(None),
+        "payrollValidationRules": portal.normalize_payroll_validation_rules(None),
+    }
+    approved = {**draft, "id": "approved-1", "status": "approved", "entries": [dict(entry)]}
+    saved = {}
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: [draft, approved])
+    monkeypatch.setattr(portal, "save_json_list_store", lambda _path, items: saved.update({"items": items}))
+    setup = portal.normalize_payroll_setup({
+        "configured": True,
+        "version": 2,
+        "effectiveMonth": "2026-08",
+        "globalValues": {"riskAllowance": 300},
+    })
+    batch_count, entry_count = portal.apply_setup_to_editable_batches(setup, "Approved allowance review")
+    assert batch_count == 1
+    assert entry_count == 1
+    assert saved["items"][0]["entries"][0]["riskAllowance"] == 300
+    assert saved["items"][0]["entries"][0]["changeReason"] == "Approved allowance review"
+    assert saved["items"][1]["entries"][0]["riskAllowance"] == 0
 
 
 def test_staff_import_schema_protects_identity_columns_and_accepts_custom_columns():

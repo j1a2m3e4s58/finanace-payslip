@@ -36,8 +36,7 @@ INCOME_ROWS = [
 
 DEDUCTION_ROWS = [
     ("5.5% SSF", "ssf"),
-    ("4.5% ESP", "esp"),
-    ("4.5% PF", "pf"),
+    ("9% PF", "pf"),
     ("P.A.Y.E Income Tax", "payeIncomeTax"),
     ("Staff Welfare", "staffWelfare"),
     ("ICU Dues", "icuDues"),
@@ -114,6 +113,10 @@ def draw_section(pdf: canvas.Canvas, x: float, top: float, width: float, title: 
 
 def generate_payslip_pdf(batch: dict, entry: dict, bank_name: str, logo_path: str | Path | None = None, settings: dict | None = None) -> bytes:
     settings = settings or {}
+    # Preserve correct totals when rendering a legacy payslip that stored PF
+    # and ESP as two separate 4.5% deductions.
+    if "esp" in entry:
+        entry = {**entry, "pf": float(entry.get("pf") or 0) + float(entry.get("esp") or 0)}
     allowance_labels = settings.get("allowanceLabels") if isinstance(settings.get("allowanceLabels"), dict) else {}
     deduction_labels = settings.get("deductionLabels") if isinstance(settings.get("deductionLabels"), dict) else {}
     employer_labels = settings.get("employerContributionLabels") if isinstance(settings.get("employerContributionLabels"), dict) else {}

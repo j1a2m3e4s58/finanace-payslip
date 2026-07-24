@@ -23,7 +23,7 @@ export default function AppLayout() {
     [ROLES.BOSS_ADMIN]: ['/profile'],
     [ROLES.SUPER_ADMIN]: ['/', '/staff', '/users', '/profile'],
     [ROLES.ADMIN]: ['/', '/staff', '/users', '/profile'],
-    [ROLES.FINANCE_OFFICER]: ['/', '/staff', '/payroll/batches', '/salary-history', '/profile'],
+    [ROLES.FINANCE_OFFICER]: ['/', '/staff', '/payroll/setup', '/payroll/batches', '/salary-history', '/profile'],
     [ROLES.FINANCE_APPROVER]: ['/', '/payroll/approvals', '/payslips/send', '/reports', '/profile'],
     [ROLES.AUDITOR]: ['/audit-logs', '/salary-history', '/reports', '/profile'],
     [ROLES.MANAGEMENT]: ['/', '/reports', '/profile'],

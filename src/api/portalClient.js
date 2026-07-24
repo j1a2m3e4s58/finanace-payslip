@@ -184,6 +184,18 @@ export async function getPayrollBatches() {
   return data.batches || [];
 }
 
+export async function getPayrollSetup() {
+  return apiRequest('/payroll-setup');
+}
+
+export async function savePayrollSetup(payload) {
+  return apiRequest('/payroll-setup', { method: 'POST', body: payload });
+}
+
+export async function setPayrollSetupLock(locked, reason) {
+  return apiRequest('/payroll-setup/lock', { method: 'POST', body: { locked, reason } });
+}
+
 export async function getReportingDashboard() {
   return apiRequest('/reporting/dashboard');
 }

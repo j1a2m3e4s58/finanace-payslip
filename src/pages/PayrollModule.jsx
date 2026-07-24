@@ -20,28 +20,26 @@ export const incomeFields = [
 ];
 /** @type {Array<[string, string, boolean?]>} */
 export const deductionFields = [
-  ['ssf', '5.5% SSF', true], ['esp', '4.5% ESP', true], ['pf', '4.5% PF', true],
+  ['ssf', '5.5% SSF', true], ['pf', '9% PF', true],
   ['payeIncomeTax', 'P.A.Y.E Income Tax'], ['staffWelfare', 'Staff Welfare'], ['icuDues', 'ICU Dues'],
 ];
-const defaultContributionRates = { employeeSsf: 5.5, employeeEsp: 4.5, employeePf: 4.5, employerSsf: 13, employerPf: 5 };
+const defaultContributionRates = { employeeSsf: 5.5, employeePf: 9, employerSsf: 13, employerPf: 5 };
 const defaultValidationRules = { maxBasicSalary: 1000000, maxOtherAmount: 250000, deductionWarningPercent: 75 };
 const formatRate = (value) => Number(value || 0).toLocaleString('en-GH', { maximumFractionDigits: 4 });
 const deductionFieldsForRates = (rates = defaultContributionRates) => [
   ['ssf', `${formatRate(rates.employeeSsf ?? 5.5)}% SSF`, true],
-  ['esp', `${formatRate(rates.employeeEsp ?? 4.5)}% ESP`, true],
-  ['pf', `${formatRate(rates.employeePf ?? 4.5)}% PF`, true],
-  ...deductionFields.slice(3),
+  ['pf', `${formatRate(rates.employeePf ?? 9)}% PF`, true],
+  ...deductionFields.slice(2),
 ];
 const manualFields = [...incomeFields.map(([key]) => key), ...deductionFields.filter(([, , automatic]) => !automatic).map(([key]) => key)];
-const trackedFields = [...manualFields, 'ssf', 'esp', 'pf', 'totalIncome', 'totalDeductions', 'netSalary', 'employerSsf', 'employerPf'];
+const trackedFields = [...manualFields, 'ssf', 'pf', 'totalIncome', 'totalDeductions', 'netSalary', 'employerSsf', 'employerPf'];
 const payrollPageSize = 8;
 
 export function calculateEntry(entry, rates = defaultContributionRates) {
   const next = { ...entry };
   const basic = Number(next.basicSalary || 0);
   next.ssf = round(basic * Number(rates.employeeSsf ?? 5.5) / 100);
-  next.esp = round(basic * Number(rates.employeeEsp ?? 4.5) / 100);
-  next.pf = round(basic * Number(rates.employeePf ?? 4.5) / 100);
+  next.pf = round(basic * Number(rates.employeePf ?? 9) / 100);
   next.employerSsf = round(basic * Number(rates.employerSsf ?? 13) / 100);
   next.employerPf = round(basic * Number(rates.employerPf ?? 5) / 100);
   next.totalIncome = round(incomeFields.reduce((sum, [key]) => sum + Number(next[key] || 0), 0));
@@ -259,7 +257,7 @@ export function PayrollEntry() {
   return <div className="space-y-6"><PageHeader title={batch.name} description={editable ? `Enter salary figures directly.${batch.sourceBatchName ? ` Copied from ${batch.sourceBatchName}; only explain staff whose values changed.` : ''}` : 'This payroll is read-only because it is in review or has been finalized.'} actions={<><SaveStateIndicator state={saveState} /><StatusBadge status={batchStatus(batch.status)} /><Link to="/payroll/batches"><SecondaryButton>Back to batches</SecondaryButton></Link></>} />
     {batch.rejectionReason && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-800"><b>{batch.decisionType === 'request_correction' ? 'Correction requested' : 'Rejected'} by {batch.rejectedBy}:</b> {batch.rejectionReason}</div>}
     {error && <ErrorBanner text={error} />}
-    <div className="rounded-xl border border-blue-500/20 bg-blue-500/[.055] p-4 text-sm"><div className="flex items-center gap-2 font-bold text-blue-700 dark:text-blue-300"><Lock className="h-4 w-4" /> Locked rate profile · effective {batch.contributionRateEffectiveMonth || 'legacy rate set'}</div><p className="mt-1 text-xs text-muted-foreground">Employee: SSF {formatRate(contributionRates.employeeSsf)}%, ESP {formatRate(contributionRates.employeeEsp)}%, PF {formatRate(contributionRates.employeePf)}% · Employer: SSF {formatRate(contributionRates.employerSsf)}%, PF {formatRate(contributionRates.employerPf)}%. Later Portal Control changes will not alter this batch.</p></div>
+    <div className="rounded-xl border border-blue-500/20 bg-blue-500/[.055] p-4 text-sm"><div className="flex items-center gap-2 font-bold text-blue-700 dark:text-blue-300"><Lock className="h-4 w-4" /> Locked rate profile · effective {batch.contributionRateEffectiveMonth || 'legacy rate set'}</div><p className="mt-1 text-xs text-muted-foreground">Employee: SSF {formatRate(contributionRates.employeeSsf)}%, PF {formatRate(contributionRates.employeePf)}% · Employer: SSF {formatRate(contributionRates.employerSsf)}%, PF {formatRate(contributionRates.employerPf)}%. Later Portal Control changes will not alter this batch.</p></div>
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-5"><Metric label="Total Income" value={money(totals.income)} /><Metric label="Total Deductions" value={money(totals.deductions)} /><Metric label="Net Salary" value={money(totals.net)} accent /><Metric label="Employer SSF" value={money(totals.employerSsf)} /><Metric label="Employer PF" value={money(totals.employerPf)} /></div>
     <Card>
       <div className="mb-5 rounded-xl border border-primary/15 bg-primary/[.035] p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-bold">Payroll completion</p><p className="text-xs text-muted-foreground">{completed} of {entryRows.length} staff completed</p></div><p className="text-2xl font-bold text-primary">{entryRows.length ? Math.round((completed / entryRows.length) * 100) : 0}%</p></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${entryRows.length ? (completed / entryRows.length) * 100 : 0}%` }} /></div></div>

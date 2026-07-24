@@ -33,6 +33,7 @@ export const routePermissions = {
   '/staff/upload-emails': 'staff.manage',
   '/staff/new': 'staff.manage',
   '/payroll/batches': 'payroll.view',
+  '/payroll/setup': 'payroll.prepare',
   '/payroll/entry': 'payroll.prepare',
   '/payroll/approvals': 'payroll.approve',
   '/payslips/preview': 'payslips.preview',

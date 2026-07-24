@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
-import { LayoutDashboard, Contact, Upload, Layers3, ClipboardCheck, FileText, Send, History, ScrollText, BarChart3, Settings, UsersRound, UserCircle, ChevronLeft, ChevronRight, Building2, Landmark, TableProperties, ServerCog, Mail, Shield, Image, DatabaseBackup } from 'lucide-react';
+import { LayoutDashboard, Contact, Upload, Layers3, ClipboardCheck, FileText, Send, History, ScrollText, BarChart3, Settings, UsersRound, UserCircle, ChevronLeft, ChevronRight, Building2, Landmark, TableProperties, ServerCog, Mail, Shield, Image, DatabaseBackup, BadgeDollarSign } from 'lucide-react';
 import { resolveAssetUrl } from '@/api/portalClient';
 
 export const navItems = [
@@ -9,6 +9,7 @@ export const navItems = [
   { label: 'Staff Directory', path: '/staff', icon: Contact, group: 'Staff', permission: 'staff.view' },
   { label: 'Import Staff', path: '/staff/upload-emails', icon: Upload, group: 'Staff', permission: 'staff.manage', desktopHidden: true },
   { label: 'Payroll Batches', path: '/payroll/batches', icon: Layers3, group: 'Payroll', permission: 'payroll.view' },
+  { label: 'Salary & Allowances', path: '/payroll/setup', icon: BadgeDollarSign, group: 'Payroll', permission: 'payroll.prepare' },
   { label: 'Payroll Approvals', path: '/payroll/approvals', icon: ClipboardCheck, group: 'Payroll', permission: 'payroll.approve' },
   { label: 'Payslip Preview', path: '/payslips/preview', icon: FileText, group: 'Payslips', permission: 'payslips.preview' },
   { label: 'Send Payslips', path: '/payslips/send', icon: Send, group: 'Payslips', permission: 'payslips.send' },
