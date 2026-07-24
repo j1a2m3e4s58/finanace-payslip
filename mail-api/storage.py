@@ -128,6 +128,46 @@ class DatabaseStore:
                 connection.execute(self.documents.insert().values(**values))
             return result
 
+    def mutate_many(self, stores: dict[str, object], callback):
+        """Atomically read, transform, and persist several document stores.
+
+        This is used for business transitions that must never be partially
+        committed, such as approving a salary setup and applying it to every
+        editable payroll batch.
+        """
+        with self._lock, self.engine.begin() as connection:
+            current, versions = {}, {}
+            for key, default in stores.items():
+                statement = select(self.documents.c.payload, self.documents.c.version).where(self.documents.c.store_key == key)
+                if self.backend == "postgresql":
+                    statement = statement.with_for_update()
+                row = connection.execute(statement).first()
+                current[key] = json.loads(row.payload) if row else default
+                versions[key] = int(row.version if row else 0)
+
+            updated, result = callback(current)
+            if not isinstance(updated, dict) or set(updated) != set(stores):
+                raise ValueError("Multi-store mutation must return every requested store")
+
+            timestamp = int(time.time() * 1000)
+            for key, payload in updated.items():
+                encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+                values = {
+                    "store_key": key,
+                    "payload": encoded,
+                    "version": versions[key] + 1,
+                    "updated_at": timestamp,
+                }
+                if versions[key]:
+                    connection.execute(
+                        self.documents.update()
+                        .where(self.documents.c.store_key == key)
+                        .values(payload=encoded, version=values["version"], updated_at=timestamp)
+                    )
+                else:
+                    connection.execute(self.documents.insert().values(**values))
+            return result
+
     def health(self) -> dict:
         with self.engine.connect() as connection:
             connection.execute(select(self.documents.c.store_key).limit(1)).first()

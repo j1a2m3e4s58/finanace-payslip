@@ -150,6 +150,142 @@ def test_payroll_setup_updates_only_editable_batches(monkeypatch):
     assert saved["items"][1]["entries"][0]["riskAllowance"] == 0
 
 
+def test_payroll_setup_selects_only_approved_version_in_date_range():
+    setup = portal.normalize_payroll_setup({
+        "status": "draft",
+        "configured": True,
+        "effectiveMonth": "2027-01",
+        "globalValues": {"riskAllowance": 999},
+        "approvedVersions": [
+            {
+                "version": 1, "configured": True, "effectiveMonth": "2026-01", "expiryMonth": "2026-06",
+                "globalValues": {"riskAllowance": 100},
+            },
+            {
+                "version": 2, "configured": True, "effectiveMonth": "2026-07", "expiryMonth": "",
+                "globalValues": {"riskAllowance": 200},
+            },
+        ],
+    })
+    assert portal.approved_setup_for_period(setup, "2026-06")["version"] == 1
+    assert portal.approved_setup_for_period(setup, "2026-07")["version"] == 2
+    assert portal.apply_setup_values({"riskAllowance": 0}, setup, "staff-1", "2026-07")["riskAllowance"] == 200
+    assert portal.apply_setup_values({"riskAllowance": 0}, setup, "staff-1", "2025-12")["riskAllowance"] == 0
+
+
+def test_staff_override_obeys_its_own_expiry_month():
+    setup = portal.normalize_payroll_setup({
+        "configured": True,
+        "effectiveMonth": "2026-01",
+        "globalValues": {"riskAllowance": 100},
+        "staffOverrides": [{
+            "staffRecordId": "staff-1",
+            "effectiveMonth": "2026-02",
+            "expiryMonth": "2026-03",
+            "values": {"riskAllowance": 400},
+            "reason": "Temporary acting allowance",
+        }],
+    })
+    assert portal.apply_setup_values({"riskAllowance": 0}, setup, "staff-1", "2026-01")["riskAllowance"] == 100
+    assert portal.apply_setup_values({"riskAllowance": 0}, setup, "staff-1", "2026-02")["riskAllowance"] == 400
+    assert portal.apply_setup_values({"riskAllowance": 0}, setup, "staff-1", "2026-04")["riskAllowance"] == 100
+
+
+def test_payroll_setup_impact_is_read_only(monkeypatch):
+    base = {field: 0 for field in portal.PAYROLL_MANUAL_FIELDS}
+    base.update({"staffRecordId": "staff-1", "staffId": "BCB-001", "fullName": "Test Staff", "basicSalary": 1000})
+    entry = portal.calculate_payroll_entry(base)
+    batches = [{
+        "id": "draft-1", "name": "August payroll", "period": "2026-08", "status": "draft",
+        "entries": [entry], "baselineEntries": [portal.payroll_baseline([entry])[0]],
+        "contributionRates": portal.normalize_contribution_rates(None),
+        "payrollValidationRules": portal.normalize_payroll_validation_rules(None),
+    }]
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: batches)
+    monkeypatch.setattr(portal, "save_json_list_store", lambda *_args: pytest.fail("Impact preview must not save payroll"))
+    setup = portal.normalize_payroll_setup({
+        "configured": True, "status": "draft", "effectiveMonth": "2026-08",
+        "globalValues": {"riskAllowance": 300}, "changeReason": "Annual allowance review",
+    })
+    impact = portal.payroll_setup_impact(setup)
+    assert impact["affectedBatches"] == 1
+    assert impact["affectedStaffEntries"] == 1
+    assert impact["uniqueAffectedStaff"] == 1
+    assert batches[0]["entries"][0]["riskAllowance"] == 0
+
+
+def test_setup_preparer_cannot_approve_own_submission(monkeypatch):
+    submitted = portal.normalize_payroll_setup({
+        "configured": True, "status": "submitted", "locked": True,
+        "submittedById": "user-1", "effectiveMonth": "2026-08",
+        "globalValues": {"riskAllowance": 300},
+    })
+    monkeypatch.setattr(portal, "require_payroll_approver", lambda: ("token", {"id": "user-1", "fullname": "Same User", "role": "SuperAdmin"}, None))
+    monkeypatch.setattr(portal, "load_payroll_setup_store", lambda: submitted)
+    monkeypatch.setattr(portal, "PUBLIC_API_ENDPOINTS", {*portal.PUBLIC_API_ENDPOINTS, "decide_payroll_setup"})
+    response = portal.app.test_client().post("/api/payroll-setup/decision", json={"decision": "approve", "comments": "Reviewed"})
+    assert response.status_code == 403
+    assert "cannot approve" in response.get_json()["error"]
+
+
+def test_setup_approval_activates_setup_and_batches_together(monkeypatch):
+    submitted = portal.normalize_payroll_setup({
+        "configured": True, "status": "submitted", "locked": True,
+        "submittedBy": "Finance Maker", "submittedById": "maker-1",
+        "effectiveMonth": "2026-08", "changeReason": "Annual allowance review",
+        "globalValues": {"riskAllowance": 300},
+    })
+    base = {field: 0 for field in portal.PAYROLL_MANUAL_FIELDS}
+    base.update({"staffRecordId": "staff-1", "staffId": "BCB-001", "fullName": "Test Staff", "basicSalary": 1000})
+    entry = portal.calculate_payroll_entry(base)
+    batches = [{
+        "id": "draft-1", "name": "August payroll", "period": "2026-08", "status": "draft",
+        "entries": [entry], "baselineEntries": [portal.payroll_baseline([entry])[0]],
+        "contributionRates": portal.normalize_contribution_rates(None),
+        "payrollValidationRules": portal.normalize_payroll_validation_rules(None),
+    }]
+    captured = {}
+
+    class FakeStore:
+        def mutate_many(self, stores, callback):
+            updated, result = callback({
+                "payroll_setup_store.json": submitted,
+                "payroll_batches_store.json": batches,
+            })
+            captured.update(updated)
+            return result
+
+    monkeypatch.setattr(portal, "PUBLIC_API_ENDPOINTS", {*portal.PUBLIC_API_ENDPOINTS, "decide_payroll_setup"})
+    monkeypatch.setattr(portal, "require_payroll_approver", lambda: ("token", {"id": "approver-1", "fullname": "Independent Approver", "role": "FinanceApprover"}, None))
+    monkeypatch.setattr(portal, "load_payroll_setup_store", lambda: submitted)
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: [])
+    monkeypatch.setattr(portal, "record_audit_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(portal, "data_fernet", lambda *args, **kwargs: None)
+    monkeypatch.setattr(portal, "DATABASE_STORE", FakeStore())
+    response = portal.app.test_client().post("/api/payroll-setup/decision", json={"decision": "approve", "comments": "Figures verified"})
+    assert response.status_code == 200
+    assert captured["payroll_setup_store.json"]["status"] == "approved"
+    assert len(captured["payroll_setup_store.json"]["approvedVersions"]) == 1
+    assert captured["payroll_batches_store.json"][0]["entries"][0]["riskAllowance"] == 300
+
+
+def test_database_mutate_many_rolls_back_all_documents(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{(tmp_path / 'transaction.db').as_posix()}")
+    store = portal.DatabaseStore(str(tmp_path))
+    store.save("setup", {"status": "submitted"})
+    store.save("batches", [{"status": "draft"}])
+
+    def failing_change(current):
+        current["setup"]["status"] = "approved"
+        current["batches"][0]["status"] = "changed"
+        raise RuntimeError("approval failed")
+
+    with pytest.raises(RuntimeError):
+        store.mutate_many({"setup": {}, "batches": []}, failing_change)
+    assert store.load("setup")[1]["status"] == "submitted"
+    assert store.load("batches")[1][0]["status"] == "draft"
+
+
 def test_staff_import_schema_protects_identity_columns_and_accepts_custom_columns():
     schema = portal.normalize_staff_import_schema({
         "version": 4,

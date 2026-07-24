@@ -55,7 +55,7 @@ function AuthenticatedApp() {
         <Route path="/staff/upload-emails" element={<RequirePermission permission="staff.manage"><UploadStaffEmails /></RequirePermission>} />
         <Route path="/staff/new" element={<RequirePermission permission="staff.manage"><AddNewStaff /></RequirePermission>} />
         <Route path="/payroll/batches" element={<RequirePermission permission="payroll.view"><PayrollBatches /></RequirePermission>} />
-        <Route path="/payroll/setup" element={<RequirePermission permission="payroll.prepare"><PayrollSetupPage /></RequirePermission>} />
+        <Route path="/payroll/setup" element={<RequirePermission permission="payroll.setup.view"><PayrollSetupPage /></RequirePermission>} />
         <Route path="/payroll/entry" element={<RequirePermission permission="payroll.prepare"><PayrollEntry /></RequirePermission>} />
         <Route path="/payroll/approvals" element={<RequirePermission permission="payroll.approve"><PayrollApprovals /></RequirePermission>} />
         <Route path="/payslips/preview" element={<RequirePermission permission="payslips.preview"><PayslipPdfPage /></RequirePermission>} />

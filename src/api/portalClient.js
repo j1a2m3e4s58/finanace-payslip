@@ -196,6 +196,18 @@ export async function setPayrollSetupLock(locked, reason) {
   return apiRequest('/payroll-setup/lock', { method: 'POST', body: { locked, reason } });
 }
 
+export async function getPayrollSetupImpact() {
+  return apiRequest('/payroll-setup/impact');
+}
+
+export async function submitPayrollSetup() {
+  return apiRequest('/payroll-setup/submit', { method: 'POST', body: {} });
+}
+
+export async function decidePayrollSetup(decision, comments = '') {
+  return apiRequest('/payroll-setup/decision', { method: 'POST', body: { decision, comments } });
+}
+
 export async function getReportingDashboard() {
   return apiRequest('/reporting/dashboard');
 }
