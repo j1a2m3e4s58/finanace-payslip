@@ -34,7 +34,7 @@ export const AuthProvider = ({ children }) => {
     authUser.role = normalizeRole(authUser.role, authUser.department);
     setUser(authUser);
     lastActivityRef.current = Date.now();
-    pingPresence(authUser.id).catch(() => {});
+    if (!authUser.mustChangePassword && authUser.mfaEnabled) pingPresence(authUser.id).catch(() => {});
     return authUser;
   }, []);
 
@@ -48,7 +48,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    if (!user?.id) return undefined;
+    if (!user?.id || user.mustChangePassword || !user.mfaEnabled) return undefined;
     const timeoutMinutes = Number(portalSettings?.sessionTimeoutMinutes || 30);
     const timeoutMs = Math.max(5, timeoutMinutes) * 60 * 1000;
     const recordActivity = () => { lastActivityRef.current = Date.now(); };
@@ -72,7 +72,9 @@ export const AuthProvider = ({ children }) => {
     const normalized = normalizeUser(nextUser);
     normalized.role = normalizeRole(normalized.role, normalized.department);
     setUser((current) => {
-      const csrfToken = current?.csrfToken || normalized?.csrfToken;
+      // Password changes rotate the session and CSRF token. Always prefer the
+      // token returned with the newest server response over the previous one.
+      const csrfToken = normalized?.csrfToken || current?.csrfToken;
       return csrfToken ? storeAuthUser(normalized, csrfToken) : normalized;
     });
   }, []);

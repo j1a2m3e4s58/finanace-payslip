@@ -261,6 +261,12 @@ export default function Profile() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 pb-20 lg:pb-0">
+      {!user.mfaEnabled && mfa.encryptionConfigured && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-900 dark:text-amber-200">
+          <p className="font-bold">Authenticator setup required</p>
+          <p className="mt-1">Enable MFA below to unlock the dashboard and the other pages available to your role.</p>
+        </div>
+      )}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">

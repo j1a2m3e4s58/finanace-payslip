@@ -15,7 +15,7 @@ export default function Header({ onMenuClick, user }) {
   const [unread, setUnread] = useState(0);
   const displayName = user?.full_name || user?.fullname || 'Finance User';
   const initials = displayName.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase();
-  const canViewNotifications = can('notifications.view');
+  const canViewNotifications = can('notifications.view') && !user?.mustChangePassword && Boolean(user?.mfaEnabled);
   const submitSearch = (event) => {
     event.preventDefault();
     if (search.trim()) {
