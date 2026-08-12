@@ -69,7 +69,7 @@ ONLINE_WINDOW_SECONDS = 20
 RESET_TOKEN_TTL_SECONDS = 30 * 60
 VERIFICATION_TTL_SECONDS = 15 * 60
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
-ALLOWED_ROLES = {"BossAdmin", "SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover", "Auditor", "Management"}
+ALLOWED_ROLES = {"BossAdmin", "SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover", "Auditor", "Management", "Employee"}
 ACCOUNT_STATUSES = {"active", "suspended", "disabled"}
 PORTAL_CONTROL_PASSWORD = str(os.getenv("PORTAL_SETTINGS_SECRET", "")).strip()
 DEFAULT_PORTAL_BRANCHES = [
@@ -3360,6 +3360,8 @@ def create_user_account():
                 return jsonify({"error": "The user email must match the linked Staff Directory email"}), 400
             if any(item.get("staffRecordId") == staff_record_id for item in users):
                 return jsonify({"error": "This Staff Directory record is already linked to a user"}), 409
+        if role == "Employee" and not staff_record_id:
+            return jsonify({"error": "Employee accounts must be linked to an active Staff Directory record"}), 400
         user = normalize_user({
             "id": f"user-{int(time.time() * 1000)}",
             "fullname": fullname,
@@ -5159,6 +5161,82 @@ def download_staff_payslip(batch_id: str, staff_record_id: str):
     return send_file(BytesIO(pdf_bytes), mimetype="application/pdf", as_attachment=request.args.get("download") == "1", download_name=filename, max_age=0)
 
 
+def employee_payslip_entry(batch: dict, staff_record_id: str) -> dict | None:
+    return next(
+        (item for item in batch.get("entries", []) if str(item.get("staffRecordId", "")) == staff_record_id),
+        None,
+    )
+
+
+@app.route("/api/my-payslips", methods=["GET"])
+def list_my_payslips():
+    _, auth_user, error = require_authenticated_user()
+    if error:
+        return error
+    staff_record_id = str(auth_user.get("staffRecordId") or "").strip()
+    if not staff_record_id:
+        return jsonify({"error": "Your login is not linked to a Staff Directory record. Contact an administrator."}), 409
+    payslips = []
+    for batch in load_json_list_store(PAYROLL_BATCHES_STORE_PATH):
+        if batch.get("status") not in {"approved", "generated", "partially_sent", "sent"}:
+            continue
+        entry = employee_payslip_entry(batch, staff_record_id)
+        if not entry:
+            continue
+        payslips.append({
+            "batchId": str(batch.get("id", "")),
+            "period": str(batch.get("period", "")),
+            "version": int(batch.get("version", 1) or 1),
+            "status": str(batch.get("status", "approved")),
+            "approvedAt": int(batch.get("approvedAt", 0) or 0),
+            "generatedAt": int(batch.get("generatedAt", 0) or 0),
+            "staffId": str(entry.get("staffId", "")),
+            "fullName": str(entry.get("fullName", auth_user.get("fullname", ""))),
+            "netSalary": float(entry.get("netSalary", 0) or 0),
+            "currency": "GHS",
+        })
+    payslips.sort(key=lambda item: (item["period"], item["version"]), reverse=True)
+    return jsonify({"payslips": payslips})
+
+
+@app.route("/api/my-payslips/<batch_id>.pdf", methods=["GET"])
+def download_my_payslip(batch_id: str):
+    _, auth_user, error = require_authenticated_user()
+    if error:
+        return error
+    staff_record_id = str(auth_user.get("staffRecordId") or "").strip()
+    if not staff_record_id:
+        return jsonify({"error": "Your login is not linked to a Staff Directory record. Contact an administrator."}), 409
+    batch, error = payslip_ready_batch(batch_id)
+    if error:
+        return error
+    entry = employee_payslip_entry(batch, staff_record_id)
+    if not entry:
+        # Never disclose whether the requested batch belongs to another employee.
+        return jsonify({"error": "Payslip not found"}), 404
+    issues = payroll_entry_issues(entry, batch.get("payrollValidationRules"), batch.get("emailDomain") or OFFICIAL_EMAIL_DOMAIN)
+    if issues:
+        return jsonify({"error": "This payslip is temporarily unavailable. Contact Finance."}), 409
+    settings, logo_path = payslip_pdf_settings_for_batch(batch)
+    password_rule = str(settings.get("pdfPasswordRule") or "staff_id")
+    try:
+        password = payslip_password_for(entry, password_rule, "")
+    except ValueError:
+        password = payslip_password_for(entry, "staff_id", "")
+    pdf_bytes = protect_pdf(
+        generate_payslip_pdf(batch, entry, str(settings.get("bankName") or "Bawjiase Community Bank PLC"), logo_path, settings),
+        password,
+    )
+    filename = secure_filename(f"{entry.get('staffId')}-{batch.get('period')}-payslip-v{batch.get('version', 1)}.pdf")
+    record_audit_log(auth_user, "DOWNLOAD_OWN_PAYSLIP", {
+        "batchId": batch_id,
+        "staffRecordId": staff_record_id,
+        "period": batch.get("period"),
+        "version": batch.get("version", 1),
+    })
+    return send_file(BytesIO(pdf_bytes), mimetype="application/pdf", as_attachment=request.args.get("download") == "1", download_name=filename, max_age=0)
+
+
 @app.route("/api/payroll-batches/<batch_id>/payslips.zip", methods=["GET"])
 def download_batch_payslips_zip(batch_id: str):
     _, auth_user, error = require_payroll_viewer()
@@ -5697,6 +5775,64 @@ def ensure_demo_staff_records() -> None:
 
 
 ensure_demo_staff_records()
+
+
+def ensure_demo_staff_accounts() -> None:
+    """Provision login accounts for fictional demo staff from an explicit server secret."""
+    if str(os.getenv("ENABLE_DEMO_STAFF", "false")).strip().lower() not in {"1", "true", "yes"}:
+        return
+    password = env_secret("DEMO_STAFF_INITIAL_PASSWORD")
+    if not password:
+        return
+    try:
+        validate_password_strength(password)
+    except ValueError as exc:
+        app.logger.error("Demo staff account provisioning skipped: %s", exc)
+        return
+
+    records_by_email = {
+        str(item.get("email", "")).strip().lower(): item
+        for item in load_json_list_store(STAFF_RECORDS_STORE_PATH)
+    }
+    users = load_user_store()
+    passwords = load_password_store()
+    users_changed = False
+    passwords_changed = False
+    for _, full_name, department, position, branch, phone, email in DEMO_STAFF_RECORDS:
+        staff_record = records_by_email.get(email)
+        if not staff_record:
+            continue
+        user = find_user_by_email(users, email)
+        if user is None:
+            user = normalize_user({
+                "id": f"demo-user-{staff_record.get('staffId')}",
+                "fullname": full_name,
+                "phone": phone,
+                "email": email,
+                "role": "Employee",
+                "position": position,
+                "department": department,
+                "branch": branch,
+                "staffRecordId": staff_record.get("id"),
+                "accountStatus": "active",
+                "isVerified": True,
+                "registrationTime": now_ms(),
+                "lastSeen": 0,
+                "isArchived": False,
+                "mustChangePassword": False,
+            })
+            users.append(user)
+            users_changed = True
+        if not passwords.get(email):
+            passwords[email] = hash_password_for_storage(password)
+            passwords_changed = True
+    if users_changed:
+        save_user_store(users)
+    if passwords_changed:
+        save_password_store(passwords)
+
+
+ensure_demo_staff_accounts()
 
 
 @app.route("/api/staff-records", methods=["GET"])
@@ -6265,7 +6401,7 @@ def auth_register():
             "fullname": str(staff_record.get("fullName") or data.get("fullname") or "").strip(),
             "phone": str(data.get("phone") or staff_record.get("phone") or "").strip(),
             "email": email,
-            "role": "Management",
+            "role": "Employee",
             "position": str(staff_record.get("position") or "Staff").strip(),
             "department": str(staff_record.get("department") or "").strip(),
             "branch": str(staff_record.get("branch") or "").strip(),

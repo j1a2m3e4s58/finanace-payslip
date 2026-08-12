@@ -1,10 +1,11 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
-import { LayoutDashboard, Contact, Upload, Layers3, ClipboardCheck, FileText, Send, History, ScrollText, BarChart3, Settings, UsersRound, UserCircle, ChevronLeft, ChevronRight, Building2, Landmark, TableProperties, ServerCog, Mail, Shield, Image, DatabaseBackup, BadgeDollarSign } from 'lucide-react';
+import { LayoutDashboard, Contact, Upload, Layers3, ClipboardCheck, FileText, Send, History, ScrollText, BarChart3, Settings, UsersRound, UserCircle, ChevronLeft, ChevronRight, Building2, Landmark, TableProperties, ServerCog, Mail, Shield, Image, DatabaseBackup, BadgeDollarSign, ReceiptText } from 'lucide-react';
 import { resolveAssetUrl } from '@/api/portalClient';
 
 export const navItems = [
+  { label: 'My Payslips', path: '/my-payslips', icon: ReceiptText, group: 'Payslips', permission: 'my-payslips.view' },
   { label: 'Dashboard', path: '/', icon: LayoutDashboard, group: 'Overview', permission: 'dashboard.view' },
   { label: 'Staff Directory', path: '/staff', icon: Contact, group: 'Staff', permission: 'staff.view' },
   { label: 'Import Staff', path: '/staff/upload-emails', icon: Upload, group: 'Staff', permission: 'staff.manage', desktopHidden: true },

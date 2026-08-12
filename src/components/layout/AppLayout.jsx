@@ -27,6 +27,7 @@ export default function AppLayout() {
     [ROLES.FINANCE_APPROVER]: ['/', '/payroll/setup', '/payroll/approvals', '/payslips/send', '/reports', '/profile'],
     [ROLES.AUDITOR]: ['/audit-logs', '/salary-history', '/reports', '/profile'],
     [ROLES.MANAGEMENT]: ['/', '/reports', '/profile'],
+    [ROLES.EMPLOYEE]: ['/my-payslips', '/profile'],
   }[user?.role] || ['/profile'];
   const mobileItems = mobileOrder.map((path) => navItems.find((item) => item.path === path)).filter((item) => item && can(item.permission));
   const primaryMobileItems = mobileItems.slice(0, 4);

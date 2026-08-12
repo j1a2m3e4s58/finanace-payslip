@@ -27,6 +27,8 @@ services:
         value: "true"
       - key: ENABLE_DEMO_STAFF
         value: "true"
+      - key: DEMO_STAFF_INITIAL_PASSWORD
+        sync: false
       - key: DISABLE_BACKUP_SCHEDULER
         value: "true"
       - key: MALWARE_SCANNER_COMMAND

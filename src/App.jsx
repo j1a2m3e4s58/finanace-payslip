@@ -35,6 +35,7 @@ const SendPayslips = lazy(() => import('@/pages/SendPayslipsPage'));
 const SalaryHistory = lazy(() => import('@/pages/SalaryHistoryPage'));
 const PayslipPdfPage = lazy(() => import('@/pages/PayslipPreviewPage'));
 const UserManagement = lazy(() => import('@/pages/UserManagement'));
+const MyPayslips = lazy(() => import('@/pages/MyPayslipsPage'));
 
 const RequirePermission = ({ permission, children }) => {
   const { can, firstAllowedPath } = useAuth();
@@ -53,6 +54,7 @@ function AuthenticatedApp() {
     <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
       <Route path="/change-password" element={<ChangePassword />} />
       <Route element={<AppLayout />}>
+        <Route path="/my-payslips" element={<RequirePermission permission="my-payslips.view"><MyPayslips /></RequirePermission>} />
         <Route path="/" element={<RequirePermission permission="dashboard.view"><Dashboard /></RequirePermission>} />
         <Route path="/staff" element={<RequirePermission permission="staff.view"><StaffDirectory /></RequirePermission>} />
         <Route path="/staff/upload-emails" element={<RequirePermission permission="staff.manage"><UploadStaffEmails /></RequirePermission>} />

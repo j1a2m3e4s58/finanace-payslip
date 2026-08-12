@@ -328,6 +328,15 @@ export function getStaffPayslipPdf(batchId, staffRecordId, options = {}, downloa
   return fileRequest(`/payroll-batches/${batchId}/payslip/${staffRecordId}.pdf?${payslipQuery(download)}`, payslipHeaders(options));
 }
 
+export async function getMyPayslips() {
+  const data = await apiRequest('/my-payslips');
+  return data.payslips || [];
+}
+
+export function getMyPayslipPdf(batchId, download = false) {
+  return fileRequest(`/my-payslips/${encodeURIComponent(batchId)}.pdf${download ? '?download=1' : ''}`);
+}
+
 export function getBatchPayslipsZip(batchId, options = {}) {
   return fileRequest(`/payroll-batches/${batchId}/payslips.zip`, payslipHeaders(options));
 }

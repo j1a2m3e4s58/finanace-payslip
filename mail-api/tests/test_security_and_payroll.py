@@ -45,6 +45,67 @@ def test_demo_staff_seed_is_disabled_by_default(monkeypatch):
     portal.ensure_demo_staff_records()
 
 
+def test_demo_staff_accounts_are_linked_and_idempotent(monkeypatch):
+    records = [
+        {"id": f"record-{index}", "staffId": row[0], "email": row[6], "employmentStatus": "active"}
+        for index, row in enumerate(portal.DEMO_STAFF_RECORDS, 1)
+    ]
+    users = []
+    passwords = {}
+    monkeypatch.setenv("ENABLE_DEMO_STAFF", "true")
+    monkeypatch.setenv("DEMO_STAFF_INITIAL_PASSWORD", "DemoEmployee!2026")
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: records)
+    monkeypatch.setattr(portal, "load_user_store", lambda: list(users))
+    monkeypatch.setattr(portal, "save_user_store", lambda updated: users.__setitem__(slice(None), updated))
+    monkeypatch.setattr(portal, "load_password_store", lambda: dict(passwords))
+    monkeypatch.setattr(portal, "save_password_store", lambda updated: passwords.update(updated))
+
+    portal.ensure_demo_staff_accounts()
+    portal.ensure_demo_staff_accounts()
+
+    assert len(users) == 10
+    assert all(user["role"] == "Employee" for user in users)
+    assert all(user["staffRecordId"] for user in users)
+    assert len(passwords) == 10
+    assert all(portal.verify_password(value, "DemoEmployee!2026") for value in passwords.values())
+
+
+def test_my_payslips_only_lists_authenticated_employee_entries(monkeypatch):
+    employee = {"id": "employee-1", "fullname": "Employee One", "staffRecordId": "staff-1"}
+    batches = [
+        {"id": "approved-own", "period": "2026-08", "status": "approved", "version": 1, "entries": [{"staffRecordId": "staff-1", "staffId": "BCB-001", "fullName": "Employee One", "netSalary": 1200}]},
+        {"id": "approved-other", "period": "2026-08", "status": "approved", "version": 1, "entries": [{"staffRecordId": "staff-2", "staffId": "BCB-002", "fullName": "Employee Two", "netSalary": 9000}]},
+        {"id": "draft-own", "period": "2026-09", "status": "draft", "version": 1, "entries": [{"staffRecordId": "staff-1", "staffId": "BCB-001", "fullName": "Employee One", "netSalary": 1500}]},
+    ]
+    monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", employee, None))
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: batches)
+    monkeypatch.setattr(portal, "parse_session_token", lambda: "token")
+    monkeypatch.setattr(portal, "load_sessions", lambda: {"token": {"userId": employee["id"]}})
+    monkeypatch.setattr(portal, "load_user_store", lambda: [employee])
+
+    response = portal.app.test_client().get("/api/my-payslips")
+
+    assert response.status_code == 200
+    payload = response.get_json()["payslips"]
+    assert [item["batchId"] for item in payload] == ["approved-own"]
+    assert payload[0]["netSalary"] == 1200
+
+
+def test_employee_cannot_download_another_staff_payslip(monkeypatch):
+    employee = {"id": "employee-1", "fullname": "Employee One", "staffRecordId": "staff-1"}
+    other_batch = {"id": "batch-1", "period": "2026-08", "status": "approved", "version": 1, "entries": [{"staffRecordId": "staff-2", "staffId": "BCB-002", "fullName": "Employee Two"}]}
+    monkeypatch.setattr(portal, "require_authenticated_user", lambda: ("token", employee, None))
+    monkeypatch.setattr(portal, "payslip_ready_batch", lambda _batch_id: (other_batch, None))
+    monkeypatch.setattr(portal, "parse_session_token", lambda: "token")
+    monkeypatch.setattr(portal, "load_sessions", lambda: {"token": {"userId": employee["id"]}})
+    monkeypatch.setattr(portal, "load_user_store", lambda: [employee])
+
+    response = portal.app.test_client().get("/api/my-payslips/batch-1.pdf")
+
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "Payslip not found"}
+
+
 def test_password_hash_is_not_plaintext():
     password = "VeryStrong!Pass42"
     stored = portal.hash_password_for_storage(password)

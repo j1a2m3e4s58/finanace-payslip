@@ -6,9 +6,11 @@ export const ROLES = {
   FINANCE_APPROVER: 'FinanceApprover',
   AUDITOR: 'Auditor',
   MANAGEMENT: 'Management',
+  EMPLOYEE: 'Employee',
 };
 
 export const ROLE_OPTIONS = [
+  { value: ROLES.EMPLOYEE, label: 'Employee' },
   { value: ROLES.SUPER_ADMIN, label: 'Super Admin' },
   { value: ROLES.ADMIN, label: 'Admin' },
   { value: ROLES.FINANCE_OFFICER, label: 'Finance Officer' },
@@ -25,9 +27,11 @@ const rolePermissions = {
   [ROLES.FINANCE_APPROVER]: ['dashboard.view', 'staff.view', 'payroll.view', 'payroll.approve', 'payroll.setup.view', 'payroll.setup.approve', 'payslips.preview', 'payslips.send', 'delivery.view', 'salary.view', 'reports.view', 'profile.view', 'profile.edit', 'notifications.view'],
   [ROLES.AUDITOR]: ['audit.view', 'salary.view', 'reports.view', 'profile.view', 'profile.edit', 'notifications.view'],
   [ROLES.MANAGEMENT]: ['dashboard.view', 'reports.view', 'profile.view', 'profile.edit', 'notifications.view'],
+  [ROLES.EMPLOYEE]: ['my-payslips.view', 'profile.view', 'profile.edit', 'notifications.view'],
 };
 
 export const routePermissions = {
+  '/my-payslips': 'my-payslips.view',
   '/': 'dashboard.view',
   '/staff': 'staff.view',
   '/staff/upload-emails': 'staff.manage',
@@ -69,6 +73,7 @@ export function hasPermission(user, permission) {
 
 export function roleLabel(role) {
   if (role === ROLES.BOSS_ADMIN) return 'Boss Admin';
+  if (role === ROLES.EMPLOYEE) return 'Employee';
   return ROLE_OPTIONS.find((item) => item.value === normalizeRole(role))?.label || 'Management';
 }
 

@@ -11,6 +11,7 @@ import ResponsiveSheet from '@/components/ui/responsive-sheet';
 const emptyForm = { fullname: '', email: '', phone: '', department: 'FINANCE', branch: 'HEAD OFFICE', position: '', role: ROLES.FINANCE_OFFICER, accountStatus: 'active', password: '', staffRecordId: '' };
 const inputClass = 'h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/25';
 const ROLE_ACCESS = {
+  Employee: ['View only their own approved payslips', 'Select previous payroll months', 'Download their own PDF receipts', 'Manage their password and profile'],
   SuperAdmin: ['Full system control', 'Manage users and settings', 'Prepare, approve and send payroll', 'View reports and audit evidence'],
   Admin: ['Manage staff records', 'Create and manage user accounts', 'Manage system settings', 'View the dashboard'],
   FinanceOfficer: ['Manage staff records', 'Prepare payroll drafts', 'Preview payslips', 'View delivery and salary history'],
