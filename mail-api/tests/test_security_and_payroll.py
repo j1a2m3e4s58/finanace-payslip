@@ -21,6 +21,45 @@ def test_password_hash_is_not_plaintext():
     assert portal.verify_password(stored, password)
 
 
+def test_initial_super_admin_bootstrap_provisions_operational_admin(monkeypatch):
+    email = "systemadmin@bawjiasecommunitybank.com"
+    users = []
+    passwords = {}
+    monkeypatch.setenv("INITIAL_SUPER_ADMIN_EMAIL", email)
+    monkeypatch.setenv("INITIAL_SUPER_ADMIN_PASSWORD", "StrongBootstrap!42")
+    monkeypatch.setenv("INITIAL_SUPER_ADMIN_NAME", "Bank System Admin")
+    monkeypatch.setattr(portal, "load_user_store", lambda: users)
+    monkeypatch.setattr(portal, "save_user_store", lambda updated: users.extend(updated[len(users):]))
+    monkeypatch.setattr(portal, "load_password_store", lambda: passwords)
+    monkeypatch.setattr(portal, "save_password_store", lambda updated: passwords.update(updated))
+
+    portal.ensure_initial_super_admin_account()
+
+    assert len(users) == 1
+    assert users[0]["email"] == email
+    assert users[0]["role"] == "SuperAdmin"
+    assert users[0]["accountStatus"] == "active"
+    assert users[0]["mustChangePassword"] is True
+    assert portal.verify_password(passwords[email], "StrongBootstrap!42")
+
+
+def test_initial_super_admin_bootstrap_does_not_replace_existing_password(monkeypatch):
+    email = "systemadmin@bawjiasecommunitybank.com"
+    existing_hash = portal.hash_password_for_storage("ExistingSecure!42")
+    users = [{"email": email, "role": "SuperAdmin"}]
+    passwords = {email: existing_hash}
+    monkeypatch.setenv("INITIAL_SUPER_ADMIN_EMAIL", email)
+    monkeypatch.setenv("INITIAL_SUPER_ADMIN_PASSWORD", "DifferentSecure!42")
+    monkeypatch.setattr(portal, "load_user_store", lambda: users)
+    monkeypatch.setattr(portal, "load_password_store", lambda: passwords)
+    monkeypatch.setattr(portal, "save_password_store", lambda updated: passwords.update(updated))
+
+    portal.ensure_initial_super_admin_account()
+
+    assert passwords[email] == existing_hash
+    assert portal.verify_password(passwords[email], "ExistingSecure!42")
+
+
 def test_payroll_calculations_are_server_side():
     payload = {field: 0 for field in portal.PAYROLL_MANUAL_FIELDS}
     payload.update({"basicSalary": 1000, "staffId": "BCB-001", "fullName": "Test Staff"})

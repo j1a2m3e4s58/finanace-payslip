@@ -1042,6 +1042,47 @@ def ensure_boss_admin_account() -> None:
         save_password_store(passwords)
 
 
+def ensure_initial_super_admin_account() -> None:
+    """Provision the first operational bank administrator from server secrets."""
+    email = str(os.getenv("INITIAL_SUPER_ADMIN_EMAIL", "") or "").strip().lower()
+    password = env_secret("INITIAL_SUPER_ADMIN_PASSWORD")
+    if not email or not password:
+        return
+    try:
+        email = validate_email(email)
+        validate_password_strength(password)
+    except ValueError as exc:
+        app.logger.error("Initial Super Admin provisioning skipped: %s", exc)
+        return
+    users = load_user_store()
+    user = find_user_by_email(users, email)
+    if user is None:
+        user = normalize_user({
+            "id": f"super-admin-{now_ms()}",
+            "fullname": str(os.getenv("INITIAL_SUPER_ADMIN_NAME", "System Administrator") or "System Administrator").strip(),
+            "phone": "",
+            "email": email,
+            "role": "SuperAdmin",
+            "position": "System Administrator",
+            "department": "IT",
+            "branch": "HEAD OFFICE",
+            "managedBranches": ["ALL"],
+            "accountStatus": "active",
+            "isVerified": True,
+            "registrationTime": now_ms(),
+            "mustChangePassword": True,
+        })
+        users.append(user)
+        save_user_store(users)
+    elif user.get("role") != "SuperAdmin":
+        app.logger.error("Initial Super Admin provisioning skipped: the configured email belongs to another account")
+        return
+    passwords = load_password_store()
+    if not passwords.get(email):
+        passwords[email] = hash_password_for_storage(password)
+        save_password_store(passwords)
+
+
 seed_password_store_if_needed()
 
 
@@ -1473,6 +1514,7 @@ def save_portal_settings_store(settings: dict) -> None:
 
 
 ensure_boss_admin_account()
+ensure_initial_super_admin_account()
 
 
 

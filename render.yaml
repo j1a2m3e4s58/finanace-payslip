@@ -47,6 +47,12 @@ services:
         value: Platform Controller
       - key: BOSS_ADMIN_INITIAL_PASSWORD
         sync: false
+      - key: INITIAL_SUPER_ADMIN_EMAIL
+        sync: false
+      - key: INITIAL_SUPER_ADMIN_NAME
+        value: System Administrator
+      - key: INITIAL_SUPER_ADMIN_PASSWORD
+        sync: false
       - key: PORTAL_SETTINGS_SECRET
         sync: false
       - key: ALLOW_BOSS_ADMIN_DATABASE_MAINTENANCE
