@@ -34,9 +34,9 @@ export const AuthProvider = ({ children }) => {
     authUser.role = normalizeRole(authUser.role, authUser.department);
     setUser(authUser);
     lastActivityRef.current = Date.now();
-    if (!authUser.mustChangePassword && authUser.mfaEnabled) pingPresence(authUser.id).catch(() => {});
+    if (!authUser.mustChangePassword && (authUser.mfaEnabled || portalSettings?.requirePrivilegedMfa === false)) pingPresence(authUser.id).catch(() => {});
     return authUser;
-  }, []);
+  }, [portalSettings?.requirePrivilegedMfa]);
 
   const logout = useCallback(async (reason = 'manual') => {
     const current = normalizeUser(getStoredAuthUser());
@@ -48,7 +48,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    if (!user?.id || user.mustChangePassword || !user.mfaEnabled) return undefined;
+    if (!user?.id || user.mustChangePassword || (!user.mfaEnabled && portalSettings?.requirePrivilegedMfa !== false)) return undefined;
     const timeoutMinutes = Number(portalSettings?.sessionTimeoutMinutes || 30);
     const timeoutMs = Math.max(5, timeoutMinutes) * 60 * 1000;
     const recordActivity = () => { lastActivityRef.current = Date.now(); };

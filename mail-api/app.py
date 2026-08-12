@@ -197,6 +197,13 @@ def boss_database_maintenance_enabled() -> bool:
     return str(os.getenv("ALLOW_BOSS_ADMIN_DATABASE_MAINTENANCE", "false")).strip().lower() in {"1", "true", "yes"}
 
 
+def privileged_mfa_required(configured_value: object = True) -> bool:
+    """Allow explicitly designated demo deployments to make MFA optional."""
+    if str(os.getenv("DISABLE_PRIVILEGED_MFA", "false")).strip().lower() in {"1", "true", "yes"}:
+        return False
+    return bool(configured_value)
+
+
 def token_storage_key(token: str) -> str:
     return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
 
@@ -1468,7 +1475,7 @@ def load_portal_settings_store() -> dict:
         "sessionTimeoutMinutes": normalize_positive_number(raw.get("sessionTimeoutMinutes"), DEFAULT_PORTAL_SETTINGS["sessionTimeoutMinutes"]),
         "restrictPayslipDownloads": bool(raw.get("restrictPayslipDownloads", DEFAULT_PORTAL_SETTINGS["restrictPayslipDownloads"])),
         "approvedPayrollOnly": True,
-        "requirePrivilegedMfa": bool(raw.get("requirePrivilegedMfa", True)),
+        "requirePrivilegedMfa": privileged_mfa_required(raw.get("requirePrivilegedMfa", True)),
         "bankAddress": str(raw.get("bankAddress") or DEFAULT_PORTAL_SETTINGS["bankAddress"]).strip(),
         "bankLogo": str(raw.get("bankLogo") or DEFAULT_PORTAL_SETTINGS["bankLogo"]).strip(),
         "authorizedSignature": str(raw.get("authorizedSignature") or "").strip(),

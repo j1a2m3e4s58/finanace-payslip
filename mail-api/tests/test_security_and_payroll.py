@@ -14,6 +14,16 @@ def test_password_policy_rejects_weak_password():
         portal.validate_password_strength("password")
 
 
+def test_demo_environment_can_make_privileged_mfa_optional(monkeypatch):
+    monkeypatch.setenv("DISABLE_PRIVILEGED_MFA", "true")
+    assert portal.privileged_mfa_required(True) is False
+
+
+def test_privileged_mfa_remains_required_by_default(monkeypatch):
+    monkeypatch.delenv("DISABLE_PRIVILEGED_MFA", raising=False)
+    assert portal.privileged_mfa_required(True) is True
+
+
 def test_password_hash_is_not_plaintext():
     password = "VeryStrong!Pass42"
     stored = portal.hash_password_for_storage(password)

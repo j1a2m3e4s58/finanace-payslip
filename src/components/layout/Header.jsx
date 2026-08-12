@@ -8,14 +8,14 @@ import { getUnreadNotificationCount } from '@/api/portalClient';
 
 export default function Header({ onMenuClick, user }) {
   const { theme, toggleTheme, policy } = useTheme();
-  const { logout, can } = useAuth();
+  const { logout, can, portalSettings } = useAuth();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const displayName = user?.full_name || user?.fullname || 'Finance User';
   const initials = displayName.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase();
-  const canViewNotifications = can('notifications.view') && !user?.mustChangePassword && Boolean(user?.mfaEnabled);
+  const canViewNotifications = can('notifications.view') && !user?.mustChangePassword && (Boolean(user?.mfaEnabled) || portalSettings?.requirePrivilegedMfa === false);
   const submitSearch = (event) => {
     event.preventDefault();
     if (search.trim()) {
