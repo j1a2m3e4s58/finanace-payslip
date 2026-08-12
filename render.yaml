@@ -30,7 +30,9 @@ services:
       - key: REQUIRE_MALWARE_SCANNER
         value: "true"
       - key: FORCE_HTTPS
-        value: "true"
+        # Render terminates TLS and redirects public HTTP traffic at its edge.
+        # Redirecting again inside Flask causes an HTTPS-to-HTTPS loop.
+        value: "false"
       - key: ALLOW_SELF_REGISTRATION
         value: "false"
       - key: ENFORCE_MAKER_CHECKER
