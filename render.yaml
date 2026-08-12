@@ -25,6 +25,8 @@ services:
         value: embedded
       - key: DISABLE_PRIVILEGED_MFA
         value: "true"
+      - key: ENABLE_DEMO_STAFF
+        value: "true"
       - key: DISABLE_BACKUP_SCHEDULER
         value: "true"
       - key: MALWARE_SCANNER_COMMAND

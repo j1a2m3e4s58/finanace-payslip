@@ -5655,6 +5655,50 @@ def staff_record_conflict(records: list[dict], candidate: dict, exclude_id: str 
     return None
 
 
+DEMO_STAFF_RECORDS = [
+    ("DEMO-001", "Ama Demo Mensah", "FINANCE", "Finance Officer", "HEAD OFFICE", "0240001001", "ama.demo@bawjiasecommunitybank.com"),
+    ("DEMO-002", "Kojo Demo Asare", "FINANCE", "Finance Assistant", "BAWJIASE", "0240001002", "kojo.demo@bawjiasecommunitybank.com"),
+    ("DEMO-003", "Akosua Demo Owusu", "HR", "HR Officer", "HEAD OFFICE", "0240001003", "akosua.demo@bawjiasecommunitybank.com"),
+    ("DEMO-004", "Kwame Demo Boateng", "IT", "IT Support Officer", "HEAD OFFICE", "0240001004", "kwame.demo@bawjiasecommunitybank.com"),
+    ("DEMO-005", "Abena Demo Osei", "BANKING OPERATIONS", "Operations Officer", "ADEISO", "0240001005", "abena.demo@bawjiasecommunitybank.com"),
+    ("DEMO-006", "Yaw Demo Addo", "CREDIT", "Credit Officer", "OFAAKOR", "0240001006", "yaw.demo@bawjiasecommunitybank.com"),
+    ("DEMO-007", "Adwoa Demo Nyarko", "MICROFINANCE", "Microfinance Officer", "KASOA MAIN", "0240001007", "adwoa.demo@bawjiasecommunitybank.com"),
+    ("DEMO-008", "Kofi Demo Antwi", "AUDIT", "Internal Auditor", "HEAD OFFICE", "0240001008", "kofi.demo@bawjiasecommunitybank.com"),
+    ("DEMO-009", "Efua Demo Appiah", "CUSTOMER SERVICE", "Customer Service Officer", "KASOA NEW MARKET", "0240001009", "efua.demo@bawjiasecommunitybank.com"),
+    ("DEMO-010", "Nana Demo Frimpong", "RECOVERY", "Recovery Officer", "BAWJIASE", "0240001010", "nana.demo@bawjiasecommunitybank.com"),
+]
+
+
+def ensure_demo_staff_records() -> None:
+    """Add fictional staff only when an environment explicitly enables demo data."""
+    if str(os.getenv("ENABLE_DEMO_STAFF", "false")).strip().lower() not in {"1", "true", "yes"}:
+        return
+    records = load_json_list_store(STAFF_RECORDS_STORE_PATH)
+    existing_ids = {str(item.get("staffId", "")).strip().upper() for item in records}
+    existing_emails = {str(item.get("email", "")).strip().lower() for item in records}
+    added = []
+    for staff_id, full_name, department, position, branch, phone, email in DEMO_STAFF_RECORDS:
+        if staff_id in existing_ids or email in existing_emails:
+            continue
+        added.append(normalize_staff_record({
+            "staffId": staff_id,
+            "fullName": full_name,
+            "department": department,
+            "position": position,
+            "branch": branch,
+            "phone": phone,
+            "email": email,
+            "employmentStatus": "active",
+        }))
+        existing_ids.add(staff_id)
+        existing_emails.add(email)
+    if added:
+        save_json_list_store(STAFF_RECORDS_STORE_PATH, [*records, *added])
+
+
+ensure_demo_staff_records()
+
+
 @app.route("/api/staff-records", methods=["GET"])
 def list_staff_records():
     _, auth_user, error = require_authenticated_user()

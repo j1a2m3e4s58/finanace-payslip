@@ -24,6 +24,27 @@ def test_privileged_mfa_remains_required_by_default(monkeypatch):
     assert portal.privileged_mfa_required(True) is True
 
 
+def test_demo_staff_seed_adds_ten_fictional_records_idempotently(monkeypatch):
+    records = []
+    monkeypatch.setenv("ENABLE_DEMO_STAFF", "true")
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: list(records))
+    monkeypatch.setattr(portal, "save_json_list_store", lambda _path, updated: records.__setitem__(slice(None), updated))
+
+    portal.ensure_demo_staff_records()
+    portal.ensure_demo_staff_records()
+
+    assert len(records) == 10
+    assert {item["staffId"] for item in records} == {f"DEMO-{number:03d}" for number in range(1, 11)}
+    assert all("Demo" in item["fullName"] for item in records)
+    assert all(item["email"].endswith("@bawjiasecommunitybank.com") for item in records)
+
+
+def test_demo_staff_seed_is_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("ENABLE_DEMO_STAFF", raising=False)
+    monkeypatch.setattr(portal, "load_json_list_store", lambda _path: pytest.fail("store should not be read"))
+    portal.ensure_demo_staff_records()
+
+
 def test_password_hash_is_not_plaintext():
     password = "VeryStrong!Pass42"
     stored = portal.hash_password_for_storage(password)
