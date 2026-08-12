@@ -1,29 +1,30 @@
 services:
   - type: web
-    name: bawjiase-payslip-platform
+    name: bawjiase-payslip-demo
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: starter
-    healthCheckPath: /api/readiness
-    preDeployCommand: python predeploy.py
+    plan: free
+    healthCheckPath: /api/health
     autoDeployTrigger: checksPass
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: bawjiase-payslip-database
+          name: bawjiase-payslip-demo-database
           property: connectionString
       - key: REQUIRE_POSTGRESQL
         value: "true"
       - key: VALIDATE_PRODUCTION_CONFIG
-        value: "true"
+        value: "false"
       - key: PORTAL_DATA_DIR
-        value: /var/lib/bcb
+        value: /tmp/bcb
       - key: BACKUP_DIR
-        value: /var/lib/bcb/backups
+        value: /tmp/bcb/backups
       - key: BACKUP_RETENTION_COUNT
         value: "12"
       - key: PAYSLIP_WORKER_MODE
-        value: external
+        value: embedded
+      - key: DISABLE_BACKUP_SCHEDULER
+        value: "true"
       - key: MALWARE_SCANNER_COMMAND
         value: /usr/bin/clamscan
       - key: REQUIRE_MALWARE_SCANNER
@@ -80,76 +81,9 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         sync: false
-    disk:
-      name: bawjiase-payslip-data
-      mountPath: /var/lib/bcb
-      sizeGB: 5
-
-  - type: worker
-    name: bawjiase-payslip-worker
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerCommand: python worker.py
-    plan: starter
-    maxShutdownDelaySeconds: 300
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: bawjiase-payslip-database
-          property: connectionString
-      - key: REQUIRE_POSTGRESQL
-        value: "true"
-      - key: VALIDATE_PRODUCTION_CONFIG
-        value: "true"
-      - key: PORTAL_DATA_DIR
-        value: /tmp/bcb
-      - key: PAYSLIP_WORKER_MODE
-        value: external
-      - key: DISABLE_BACKUP_SCHEDULER
-        value: "true"
-      - key: MALWARE_SCANNER_COMMAND
-        value: /usr/bin/clamscan
-      - key: REQUIRE_MALWARE_SCANNER
-        value: "true"
-      - key: FORCE_HTTPS
-        value: "true"
-      - key: ALLOW_SELF_REGISTRATION
-        value: "false"
-      - key: ENFORCE_MAKER_CHECKER
-        value: "true"
-      - key: MAX_LOGIN_ATTEMPTS
-        value: "5"
-      - key: ACCOUNT_LOCKOUT_MINUTES
-        value: "15"
-      - key: DATA_ENCRYPTION_KEY
-        sync: false
-      - key: MFA_ENCRYPTION_KEY
-        sync: false
-      - key: BACKUP_ENCRYPTION_KEY
-        sync: false
-      - key: MAIL_SERVER
-        sync: false
-      - key: MAIL_PORT
-        value: "465"
-      - key: MAIL_SECURITY
-        value: ssl
-      - key: MAIL_USERNAME
-        sync: false
-      - key: MAIL_PASSWORD
-        sync: false
-      - key: MAIL_DEFAULT_SENDER
-        sync: false
-      - key: DELIVERY_WEBHOOK_SECRET
-        sync: false
-      - key: MONITORING_TOKEN
-        sync: false
-      - key: PASSWORD_RESET_BASE_URL
-        sync: false
-      - key: ALLOWED_ORIGINS
-        sync: false
 
 databases:
-  - name: bawjiase-payslip-database
-    plan: basic-256mb
+  - name: bawjiase-payslip-demo-database
+    plan: free
     databaseName: bcb_payslip
     user: bcb_app

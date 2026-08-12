@@ -196,7 +196,7 @@ export default function StaffDirectoryPage() {
     if (!selected) return;
     setSaving(true);
     try {
-      await updateStaffRecord(selected.id, form);
+      await updateStaffRecord(selected.id, { ...form, expectedVersion: selected.recordVersion || 1 });
       toast.success(
         "The staff record was updated and added to the audit trail.",
         { title: "Staff record saved" },
@@ -219,7 +219,7 @@ export default function StaffDirectoryPage() {
     if (!statusAction?.reason.trim()) return;
     const { record, next, reason } = statusAction;
     try {
-      await changeStaffRecordStatus(record.id, next, reason);
+      await changeStaffRecordStatus(record.id, next, reason, record.recordVersion || 1);
       setStatusAction(null);
       toast.warning(`${record.fullName} is now ${next}.`, {
         title: "Employment status changed",

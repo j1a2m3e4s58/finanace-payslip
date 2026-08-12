@@ -31,6 +31,13 @@ from PIL import Image as PILImage, UnidentifiedImageError
 from payslip_pdf import generate_payslip_pdf, protect_pdf
 from report_exports import generate_report_pdf, generate_report_xlsx
 from storage import DatabaseStore
+from payroll_setup_service import (
+    expired_profiles_without_fallback,
+    month_in_range as setup_month_in_range,
+    select_approved_profile,
+    validate_proposed_period,
+)
+from api_pagination import paginate, parse_pagination
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -2452,7 +2459,14 @@ def get_notifications():
         if str(item.get("userId", "")).strip() == auth_user["id"]
     ]
     user_items.sort(key=lambda item: int(item.get("createdAt", 0) or 0), reverse=True)
-    return jsonify({"notifications": user_items})
+    try:
+        page, page_size, requested = parse_pagination(request.args)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not requested:
+        return jsonify({"notifications": user_items})
+    rows, pagination = paginate(user_items, page, page_size)
+    return jsonify({"notifications": rows, "pagination": pagination})
 
 
 @app.route("/api/notifications/unread-count", methods=["GET"])
@@ -3391,7 +3405,39 @@ def list_users():
     if error:
         return error
     bank_users = [user for user in load_user_store() if user.get("role") != "BossAdmin"]
-    return jsonify({"users": serialize_users_with_presence(bank_users)})
+    summary = {
+        "activeSuperAdmins": sum(
+            1
+            for user in bank_users
+            if user.get("role") == "SuperAdmin" and user.get("accountStatus") == "active"
+        )
+    }
+    query = str(request.args.get("query", "")).strip().lower()
+    status = str(request.args.get("status", "all")).strip().lower()
+    if query:
+        bank_users = [
+            user for user in bank_users
+            if query in " ".join(str(user.get(key, "")) for key in ("fullname", "email", "role", "department", "branch")).lower()
+        ]
+    if status in ACCOUNT_STATUSES:
+        bank_users = [user for user in bank_users if user.get("accountStatus") == status]
+    elif status == "mfa_required":
+        mfa_store = load_mfa_store()
+        bank_users = [
+            user for user in bank_users
+            if user.get("role") in {"SuperAdmin", "Admin", "FinanceOfficer", "FinanceApprover"}
+            and not bool((mfa_store.get(user.get("id")) or {}).get("enabled"))
+        ]
+    bank_users.sort(key=lambda item: str(item.get("fullname", "")).lower())
+    serialized = serialize_users_with_presence(bank_users)
+    try:
+        page, page_size, requested = parse_pagination(request.args)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not requested:
+        return jsonify({"users": serialized, "summary": summary})
+    rows, pagination = paginate(serialized, page, page_size)
+    return jsonify({"users": rows, "pagination": pagination, "summary": summary})
 
 
 @app.route("/api/users/<user_id>", methods=["GET"])
@@ -3740,17 +3786,26 @@ def save_payroll_setup_store(setup: dict) -> None:
     atomic_write_json(PAYROLL_SETUP_STORE_PATH, payload)
 
 
+def mutate_payroll_setup_store(callback):
+    fields = SENSITIVE_STORE_FIELDS[os.path.abspath(PAYROLL_SETUP_STORE_PATH)]
+
+    def transform(raw):
+        decoded = transform_sensitive_values(raw, fields, False) if fields else raw
+        updated, result = callback(normalize_payroll_setup(decoded))
+        normalized = normalize_payroll_setup(updated)
+        encoded = transform_sensitive_values(normalized, fields, True) if fields and data_fernet() else normalized
+        return encoded, result
+
+    return DATABASE_STORE.mutate(os.path.basename(PAYROLL_SETUP_STORE_PATH), {}, transform)
+
+
 def month_in_setup_range(period: str, effective_month: str, expiry_month: str = "") -> bool:
-    return bool(period and effective_month and period >= effective_month and (not expiry_month or period <= expiry_month))
+    return setup_month_in_range(period, effective_month, expiry_month)
 
 
 def approved_setup_for_period(setup: dict, period: str) -> dict | None:
     normalized = normalize_payroll_setup(setup)
-    matches = [
-        item for item in normalized.get("approvedVersions", [])
-        if item.get("configured") and month_in_setup_range(period, item.get("effectiveMonth", ""), item.get("expiryMonth", ""))
-    ]
-    return matches[-1] if matches else None
+    return select_approved_profile(normalized.get("approvedVersions", []), period)
 
 
 def apply_setup_values(payload: dict, setup: dict, staff_record_id: object, period: str = "") -> dict:
@@ -3760,6 +3815,9 @@ def apply_setup_values(payload: dict, setup: dict, staff_record_id: object, peri
         normalize_setup_profile(setup) if not normalized.get("approvedVersions") else normalized.get("approvedVersions", [])[-1]
     )
     if not profile or not profile.get("configured"):
+        if period and expired_profiles_without_fallback(normalized.get("approvedVersions", []), period):
+            for field in PAYROLL_GLOBAL_SETUP_FIELDS:
+                prepared[field] = 0
         return prepared
     for field, value in profile.get("globalValues", {}).items():
         if field in PAYROLL_GLOBAL_SETUP_FIELDS and value is not None:
@@ -3946,7 +4004,11 @@ def apply_setup_to_batches(
             continue
         period = str(batch.get("period", ""))
         active_profile = approved_setup_for_period(setup, period)
-        if not active_profile:
+        expired_profiles = expired_profiles_without_fallback(
+            normalize_payroll_setup(setup).get("approvedVersions", []),
+            period,
+        )
+        if not active_profile and not expired_profiles:
             continue
         baseline_by_staff = {
             item.get("staffRecordId"): item for item in batch.get("baselineEntries", [])
@@ -3973,8 +4035,10 @@ def apply_setup_to_batches(
             continue
         batch["entries"] = next_entries
         batch["summary"] = payroll_batch_summary(next_entries)
-        batch["payrollSetupVersion"] = active_profile.get("version")
-        batch["payrollSetupEffectiveMonth"] = active_profile.get("effectiveMonth")
+        applied_profile = active_profile or expired_profiles[-1]
+        batch["payrollSetupVersion"] = applied_profile.get("version")
+        batch["payrollSetupEffectiveMonth"] = applied_profile.get("effectiveMonth")
+        batch["payrollSetupExpiredReset"] = not bool(active_profile)
         batch["pendingChangeCount"] = sum(
             len(payroll_entry_changes(item, baseline_by_staff.get(item.get("staffRecordId"))))
             for item in next_entries
@@ -4123,6 +4187,10 @@ def update_payroll_setup():
     expiry_month = normalize_effective_month(data.get("expiryMonth"), "") if data.get("expiryMonth") else ""
     if expiry_month and expiry_month < effective_month:
         return jsonify({"error": "Expiry month cannot be earlier than the effective month"}), 400
+    try:
+        validate_proposed_period(current.get("approvedVersions", []), effective_month, expiry_month)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
     incoming_global = data.get("globalValues")
     if not isinstance(incoming_global, dict):
         return jsonify({"error": "Bank-wide allowance values are required"}), 400
@@ -4166,6 +4234,11 @@ def update_payroll_setup():
             override_expiry = normalize_effective_month(item.get("expiryMonth"), "") if item.get("expiryMonth") else ""
             if override_expiry and override_expiry < override_effective:
                 raise ValueError(f"Expiry month for {active_staff[staff_record_id].get('fullName')} is earlier than its effective month")
+            if override_expiry and any(normalized_values.get(field) is not None for field in {"basicSalary", "payeIncomeTax"}):
+                raise ValueError(
+                    f"{active_staff[staff_record_id].get('fullName')}: expiring Basic Salary or P.A.Y.E requires an explicit replacement setup. "
+                    "Remove the expiry month or create a later approved adjustment."
+                )
             overrides.append({
                 "staffRecordId": staff_record_id,
                 "values": normalized_values,
@@ -4213,7 +4286,19 @@ def update_payroll_setup():
             },
         ][-100:],
     }
-    save_payroll_setup_store(setup)
+    expected_version = int(data.get("expectedVersion", current.get("version", 0)) or 0)
+
+    def save_if_current(stored):
+        if int(stored.get("version", 0) or 0) != expected_version:
+            raise ValueError("This setup was changed by another user. Refresh the page before saving.")
+        if stored.get("status") == "submitted" or stored.get("locked"):
+            raise ValueError("This setup is no longer editable. Refresh the page.")
+        return setup, setup
+
+    try:
+        setup = mutate_payroll_setup_store(save_if_current)
+    except ValueError as exc:
+        return jsonify({"error": str(exc), "conflict": True}), 409
     impact = payroll_setup_impact(setup)
     record_audit_log(auth_user, "SAVE_SALARY_ALLOWANCE_SETUP_DRAFT", {
         "effectiveMonth": effective_month,
@@ -4246,29 +4331,39 @@ def submit_payroll_setup():
     _, auth_user, error = require_payroll_preparer()
     if error:
         return error
-    setup = load_payroll_setup_store()
-    if setup.get("status") != "draft" or not setup.get("configured"):
-        return jsonify({"error": "Save a valid draft before submitting it for approval"}), 409
+    payload = request.get_json(silent=True) or {}
+    expected_version = int(payload.get("expectedVersion", -1) or -1)
     timestamp = now_ms()
-    setup.update({
-        "status": "submitted",
-        "locked": True,
-        "lockReason": "Submitted for approval",
-        "submittedAt": timestamp,
-        "submittedBy": auth_user.get("fullname"),
-        "submittedById": auth_user.get("id"),
-        "updatedAt": timestamp,
-    })
-    setup["history"] = [*setup.get("history", []), {
-        "id": f"setup-submit-{timestamp}",
-        "action": "submitted",
-        "actorName": auth_user.get("fullname"),
-        "timestamp": timestamp,
-        "effectiveMonth": setup.get("effectiveMonth"),
-        "expiryMonth": setup.get("expiryMonth"),
-        "reason": setup.get("changeReason"),
-    }][-100:]
-    save_payroll_setup_store(setup)
+
+    def submit_if_current(setup):
+        if expected_version >= 0 and int(setup.get("version", 0) or 0) != expected_version:
+            raise ValueError("This setup was changed by another user. Refresh before submitting.")
+        if setup.get("status") != "draft" or not setup.get("configured"):
+            raise ValueError("Save a valid draft before submitting it for approval")
+        setup.update({
+            "status": "submitted",
+            "locked": True,
+            "lockReason": "Submitted for approval",
+            "submittedAt": timestamp,
+            "submittedBy": auth_user.get("fullname"),
+            "submittedById": auth_user.get("id"),
+            "updatedAt": timestamp,
+        })
+        setup["history"] = [*setup.get("history", []), {
+            "id": f"setup-submit-{timestamp}",
+            "action": "submitted",
+            "actorName": auth_user.get("fullname"),
+            "timestamp": timestamp,
+            "effectiveMonth": setup.get("effectiveMonth"),
+            "expiryMonth": setup.get("expiryMonth"),
+            "reason": setup.get("changeReason"),
+        }][-100:]
+        return setup, setup
+
+    try:
+        setup = mutate_payroll_setup_store(submit_if_current)
+    except ValueError as exc:
+        return jsonify({"error": str(exc), "conflict": True}), 409
     impact = payroll_setup_impact(setup)
     record_audit_log(auth_user, "SUBMIT_SALARY_ALLOWANCE_SETUP", {
         "effectiveMonth": setup.get("effectiveMonth"),
@@ -4470,8 +4565,22 @@ def list_payroll_batches():
     if error:
         return error
     batches = load_json_list_store(PAYROLL_BATCHES_STORE_PATH)
+    status = str(request.args.get("status", "all")).strip().lower()
+    query = str(request.args.get("query", "")).strip().lower()
+    if status != "all":
+        batches = [item for item in batches if str(item.get("status", "")).lower() == status]
+    if query:
+        batches = [item for item in batches if query in f"{item.get('name', '')} {item.get('period', '')} {item.get('createdBy', '')}".lower()]
     batches.sort(key=lambda item: str(item.get("period", "")), reverse=True)
-    return jsonify({"batches": [enrich_payroll_batch(batch) for batch in batches]})
+    enriched = [enrich_payroll_batch(batch) for batch in batches]
+    try:
+        page, page_size, requested = parse_pagination(request.args)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not requested:
+        return jsonify({"batches": enriched})
+    rows, pagination = paginate(enriched, page, page_size)
+    return jsonify({"batches": rows, "pagination": pagination})
 
 
 @app.route("/api/payroll-batches", methods=["POST", "OPTIONS"])
@@ -4507,7 +4616,11 @@ def create_payroll_batch():
     validation_rules = normalize_payroll_validation_rules(portal_settings.get("payrollValidationRules"))
     payroll_setup = load_payroll_setup_store()
     active_setup_profile = approved_setup_for_period(payroll_setup, period)
-    setup_applies = bool(active_setup_profile)
+    expired_setup_profiles = expired_profiles_without_fallback(
+        payroll_setup.get("approvedVersions", []),
+        period,
+    )
+    setup_applies = bool(active_setup_profile or expired_setup_profiles)
     source_entries = {str(item.get("staffId", "")).lower(): item for item in (source.get("entries", []) if source else [])}
     entries = []
     baselines = []
@@ -4543,8 +4656,9 @@ def create_payroll_batch():
         "contributionRates": contribution_rates,
         "contributionRateEffectiveMonth": rate_profile["effectiveMonth"],
         "payrollValidationRules": validation_rules,
-        "payrollSetupVersion": active_setup_profile.get("version") if setup_applies else None,
-        "payrollSetupEffectiveMonth": active_setup_profile.get("effectiveMonth") if setup_applies else None,
+        "payrollSetupVersion": (active_setup_profile or (expired_setup_profiles[-1] if expired_setup_profiles else {})).get("version") if setup_applies else None,
+        "payrollSetupEffectiveMonth": (active_setup_profile or (expired_setup_profiles[-1] if expired_setup_profiles else {})).get("effectiveMonth") if setup_applies else None,
+        "payrollSetupExpiredReset": bool(expired_setup_profiles and not active_setup_profile),
         "emailDomain": portal_settings["emailDomain"],
         "requiresChangeApproval": False, "pendingChangeCount": 0,
         "createdBy": auth_user.get("fullname"), "createdById": auth_user.get("id"),
@@ -4861,7 +4975,14 @@ def get_salary_change_history():
     if staff_record_id:
         history = [item for item in history if str(item.get("staffRecordId")) == staff_record_id]
     history.sort(key=lambda item: int(item.get("changedAt", 0)), reverse=True)
-    return jsonify({"history": history})
+    try:
+        page, page_size, requested = parse_pagination(request.args)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not requested:
+        return jsonify({"history": history})
+    rows, pagination = paginate(history, page, page_size)
+    return jsonify({"history": rows, "pagination": pagination})
 
 
 def payslip_password_for(entry: dict, rule: str, custom_password: str) -> str | None:
@@ -5468,6 +5589,7 @@ def normalize_staff_record(data: dict, existing: dict | None = None) -> dict:
         "customFields": custom_fields,
         "createdAt": int(current.get("createdAt", now) or now),
         "updatedAt": now,
+        "recordVersion": int(current.get("recordVersion", 0) or 0) + 1,
     }
 
 
@@ -5493,10 +5615,29 @@ def list_staff_records():
         return jsonify({"error": "Staff Directory access required"}), 403
     records = load_json_list_store(STAFF_RECORDS_STORE_PATH)
     status = str(request.args.get("status", "all")).strip().lower()
+    query = str(request.args.get("query", "")).strip().lower()
+    department = str(request.args.get("department", "")).strip().upper()
+    branch = str(request.args.get("branch", "")).strip().upper()
     if status in {"active", "inactive"}:
         records = [item for item in records if str(item.get("employmentStatus", "active")).lower() == status]
+    if query:
+        records = [
+            item for item in records
+            if query in " ".join(str(item.get(key, "")) for key in ("fullName", "staffId", "email", "department", "branch", "position")).lower()
+        ]
+    if department:
+        records = [item for item in records if str(item.get("department", "")).upper() == department]
+    if branch:
+        records = [item for item in records if str(item.get("branch", "")).upper() == branch]
     records.sort(key=lambda item: str(item.get("fullName", "")).lower())
-    return jsonify({"records": records})
+    try:
+        page, page_size, requested = parse_pagination(request.args)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not requested:
+        return jsonify({"records": records})
+    rows, pagination = paginate(records, page, page_size)
+    return jsonify({"records": rows, "pagination": pagination})
 
 
 @app.route("/api/staff-records", methods=["POST", "OPTIONS"])
@@ -5598,6 +5739,9 @@ def update_staff_record(record_id: str):
     current = next((item for item in records if str(item.get("id")) == record_id), None)
     if not current:
         return jsonify({"error": "Staff record not found"}), 404
+    expected_version = int(data.get("expectedVersion", current.get("recordVersion", 1)) or 1)
+    if int(current.get("recordVersion", 1) or 1) != expected_version:
+        return jsonify({"error": "This staff record was changed by another user. Refresh before saving.", "conflict": True}), 409
     try:
         updated = normalize_staff_record(data, current)
         conflict = staff_record_conflict(records, updated, record_id)
@@ -5610,8 +5754,21 @@ def update_staff_record(record_id: str):
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     previous_email = current.get("email")
-    current.update(updated)
-    save_json_list_store(STAFF_RECORDS_STORE_PATH, records)
+    def update_if_current(stored_records):
+        stored = next((item for item in stored_records if str(item.get("id")) == record_id), None)
+        if not stored or int(stored.get("recordVersion", 1) or 1) != expected_version:
+            raise RuntimeError("This staff record was changed by another user. Refresh before saving.")
+        conflict = staff_record_conflict(stored_records, updated, record_id)
+        if conflict:
+            raise ValueError(conflict)
+        stored.update(updated)
+        return stored_records, dict(stored)
+    try:
+        updated = mutate_json_list_store(STAFF_RECORDS_STORE_PATH, update_if_current)
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc), "conflict": True}), 409
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     action = "EDIT_STAFF_EMAIL" if previous_email != updated["email"] else "UPDATE_STAFF_RECORD"
     record_audit_log(auth_user, action, {"staffId": updated["staffId"], "staffName": updated["fullName"], "beforeEmail": previous_email, "email": updated["email"], "reason": reason})
     return jsonify({"ok": True, "record": updated})
@@ -5639,9 +5796,21 @@ def change_staff_record_status(record_id: str):
     record = next((item for item in records if str(item.get("id")) == record_id), None)
     if not record:
         return jsonify({"error": "Staff record not found"}), 404
-    record["employmentStatus"] = status
-    record["updatedAt"] = now_ms()
-    save_json_list_store(STAFF_RECORDS_STORE_PATH, records)
+    expected_version = int(data.get("expectedVersion", record.get("recordVersion", 1)) or 1)
+    if int(record.get("recordVersion", 1) or 1) != expected_version:
+        return jsonify({"error": "This staff record was changed by another user. Refresh before changing its status.", "conflict": True}), 409
+    def change_status_if_current(stored_records):
+        stored = next((item for item in stored_records if str(item.get("id")) == record_id), None)
+        if not stored or int(stored.get("recordVersion", 1) or 1) != expected_version:
+            raise RuntimeError("This staff record was changed by another user. Refresh before changing its status.")
+        stored["employmentStatus"] = status
+        stored["updatedAt"] = now_ms()
+        stored["recordVersion"] = int(stored.get("recordVersion", 1) or 1) + 1
+        return stored_records, dict(stored)
+    try:
+        record = mutate_json_list_store(STAFF_RECORDS_STORE_PATH, change_status_if_current)
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc), "conflict": True}), 409
     if status == "inactive":
         users = load_user_store()
         linked_user = next((item for item in users if item.get("staffRecordId") == record_id), None)

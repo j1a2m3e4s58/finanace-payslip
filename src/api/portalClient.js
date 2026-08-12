@@ -154,6 +154,15 @@ export async function getStaffDirectory(status = "all") {
   return data.records || [];
 }
 
+export async function getStaffDirectoryPage({ status = 'all', query = '', department = '', branch = '', page = 1, pageSize = 25 } = {}) {
+  const params = new URLSearchParams({ status, page: String(page), pageSize: String(pageSize) });
+  if (query) params.set('query', query);
+  if (department) params.set('department', department);
+  if (branch) params.set('branch', branch);
+  const data = await apiRequest(`/staff-records?${params.toString()}`);
+  return { records: data.records || [], pagination: data.pagination || { page: 1, pageSize, total: 0, pages: 1 } };
+}
+
 export async function createStaffRecord(payload) {
   const data = await apiRequest("/staff-records", { method: "POST", body: payload });
   return data.record;
@@ -169,8 +178,8 @@ export async function updateStaffRecord(recordId, payload) {
   return data.record;
 }
 
-export async function changeStaffRecordStatus(recordId, employmentStatus, reason) {
-  const data = await apiRequest(`/staff-records/${recordId}/status`, { method: "POST", body: { employmentStatus, reason } });
+export async function changeStaffRecordStatus(recordId, employmentStatus, reason, expectedVersion) {
+  const data = await apiRequest(`/staff-records/${recordId}/status`, { method: "POST", body: { employmentStatus, reason, expectedVersion } });
   return data.record;
 }
 
@@ -182,6 +191,13 @@ export async function getStaffRecordAuditLogs() {
 export async function getPayrollBatches() {
   const data = await apiRequest('/payroll-batches');
   return data.batches || [];
+}
+
+export async function getPayrollBatchesPage({ status = 'all', query = '', page = 1, pageSize = 25 } = {}) {
+  const params = new URLSearchParams({ status, page: String(page), pageSize: String(pageSize) });
+  if (query) params.set('query', query);
+  const data = await apiRequest(`/payroll-batches?${params.toString()}`);
+  return { batches: data.batches || [], pagination: data.pagination || { page: 1, pageSize, total: 0, pages: 1 } };
 }
 
 export async function getPayrollSetup() {
@@ -200,8 +216,8 @@ export async function getPayrollSetupImpact() {
   return apiRequest('/payroll-setup/impact');
 }
 
-export async function submitPayrollSetup() {
-  return apiRequest('/payroll-setup/submit', { method: 'POST', body: {} });
+export async function submitPayrollSetup(expectedVersion) {
+  return apiRequest('/payroll-setup/submit', { method: 'POST', body: { expectedVersion } });
 }
 
 export async function decidePayrollSetup(decision, comments = '') {
@@ -291,6 +307,13 @@ export async function getSalaryHistory(staffRecordId = '') {
   return data.history || [];
 }
 
+export async function getSalaryHistoryPage({ staffRecordId = '', page = 1, pageSize = 25 } = {}) {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+  if (staffRecordId) params.set('staffRecordId', staffRecordId);
+  const data = await apiRequest(`/salary-history?${params.toString()}`);
+  return { history: data.history || [], pagination: data.pagination || { page: 1, pageSize, total: 0, pages: 1 } };
+}
+
 function payslipQuery(download = false) {
   const params = new URLSearchParams();
   if (download) params.set('download', '1');
@@ -312,6 +335,17 @@ export function getBatchPayslipsZip(batchId, options = {}) {
 export async function getUsers() {
   const data = await apiRequest("/users");
   return (data.users || []).map(normalizeUser);
+}
+
+export async function getUsersPage({ query = '', status = 'all', page = 1, pageSize = 12 } = {}) {
+  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), status });
+  if (query) params.set('query', query);
+  const data = await apiRequest(`/users?${params.toString()}`);
+  return {
+    users: (data.users || []).map(normalizeUser),
+    pagination: data.pagination || { page: 1, pageSize, total: 0, pages: 1 },
+    summary: data.summary || { activeSuperAdmins: 0 },
+  };
 }
 
 export async function getUserActivity(userId) {
@@ -397,6 +431,11 @@ export async function purgeSelectedAuditLogs(ids, reason) {
 export async function getNotifications() {
   const data = await apiRequest("/notifications");
   return data.notifications || [];
+}
+
+export async function getNotificationsPage({ page = 1, pageSize = 20 } = {}) {
+  const data = await apiRequest(`/notifications?page=${page}&pageSize=${pageSize}`);
+  return { notifications: data.notifications || [], pagination: data.pagination || { page: 1, pageSize, total: 0, pages: 1 } };
 }
 
 export async function getUnreadNotificationCount() {

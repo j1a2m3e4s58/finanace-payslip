@@ -1,4 +1,5 @@
 import { Toaster } from '@/components/ui/toaster';
+import { lazy, Suspense } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClientInstance } from '@/lib/query-client';
 import { BrowserRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
@@ -9,29 +10,31 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 import ScrollToTop from '@/components/ScrollToTop';
 import PageNotFound from '@/lib/PageNotFound';
 import AppLayout from '@/components/layout/AppLayout';
-import Login from '@/pages/Login';
-import Register from '@/pages/Register';
-import ForgotPassword from '@/pages/ForgotPassword';
-import ResetPassword from '@/pages/ResetPassword';
-import ChangePassword from '@/pages/ChangePassword';
-import Dashboard from '@/pages/Dashboard';
-import Profile from '@/pages/Profile';
-import Notifications from '@/pages/Notifications';
-import Settings from '@/pages/Settings';
-import Reports from '@/pages/ReportsPage';
-import { PayrollApprovals, PayrollEntry } from '@/pages/PayrollModule';
-import PayrollBatches from '@/pages/PayrollBatchesPage';
-import PayrollSetupPage from '@/pages/PayrollSetupPage';
-import AddNewStaff from '@/pages/AddNewStaffPage';
-import StaffDirectory from '@/pages/StaffDirectoryPage';
-import UploadStaffEmails from '@/pages/StaffUploadPage';
-import AuditLogs from '@/pages/AuditLogsPage';
-import SendPayslips from '@/pages/SendPayslipsPage';
-import SalaryHistory from '@/pages/SalaryHistoryPage';
-import PayslipPdfPage from '@/pages/PayslipPreviewPage';
-import UserManagement from '@/pages/UserManagement';
 import { AppLoadingState, OfflineBanner, PageState, SystemStateBoundary } from '@/components/SystemStateBoundary';
 import PwaInstallPrompt from '@/components/PwaInstallPrompt';
+
+const Login = lazy(() => import('@/pages/Login'));
+const Register = lazy(() => import('@/pages/Register'));
+const ForgotPassword = lazy(() => import('@/pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('@/pages/ResetPassword'));
+const ChangePassword = lazy(() => import('@/pages/ChangePassword'));
+const Dashboard = lazy(() => import('@/pages/Dashboard'));
+const Profile = lazy(() => import('@/pages/Profile'));
+const Notifications = lazy(() => import('@/pages/Notifications'));
+const Settings = lazy(() => import('@/pages/Settings'));
+const Reports = lazy(() => import('@/pages/ReportsPage'));
+const PayrollApprovals = lazy(() => import('@/pages/PayrollModule').then((module) => ({ default: module.PayrollApprovals })));
+const PayrollEntry = lazy(() => import('@/pages/PayrollModule').then((module) => ({ default: module.PayrollEntry })));
+const PayrollBatches = lazy(() => import('@/pages/PayrollBatchesPage'));
+const PayrollSetupPage = lazy(() => import('@/pages/PayrollSetupPage'));
+const AddNewStaff = lazy(() => import('@/pages/AddNewStaffPage'));
+const StaffDirectory = lazy(() => import('@/pages/StaffDirectoryPage'));
+const UploadStaffEmails = lazy(() => import('@/pages/StaffUploadPage'));
+const AuditLogs = lazy(() => import('@/pages/AuditLogsPage'));
+const SendPayslips = lazy(() => import('@/pages/SendPayslipsPage'));
+const SalaryHistory = lazy(() => import('@/pages/SalaryHistoryPage'));
+const PayslipPdfPage = lazy(() => import('@/pages/PayslipPreviewPage'));
+const UserManagement = lazy(() => import('@/pages/UserManagement'));
 
 const RequirePermission = ({ permission, children }) => {
   const { can, firstAllowedPath } = useAuth();
@@ -75,5 +78,5 @@ function AuthenticatedApp() {
 }
 
 export default function App() {
-  return <SystemStateBoundary><AuthProvider><ThemeProvider><QueryClientProvider client={queryClientInstance}><Router><ScrollToTop /><OfflineBanner /><AuthenticatedApp /><PwaInstallPrompt /></Router><Toaster /></QueryClientProvider></ThemeProvider></AuthProvider></SystemStateBoundary>;
+  return <SystemStateBoundary><AuthProvider><ThemeProvider><QueryClientProvider client={queryClientInstance}><Router><ScrollToTop /><OfflineBanner /><Suspense fallback={<AppLoadingState />}><AuthenticatedApp /></Suspense><PwaInstallPrompt /></Router><Toaster /></QueryClientProvider></ThemeProvider></AuthProvider></SystemStateBoundary>;
 }

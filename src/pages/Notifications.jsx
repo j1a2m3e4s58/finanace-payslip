@@ -3,7 +3,7 @@ import { Bell, CheckCheck, Inbox, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   deleteNotification,
-  getNotifications,
+  getNotificationsPage,
   markAllNotificationsRead,
   markNotificationRead,
 } from "@/api/portalClient";
@@ -25,11 +25,14 @@ export default function Notifications() {
   const [error, setError] = useState("");
   const [selectedIds, setSelectedIds] = useState([]);
   const [deleting, setDeleting] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ page: 1, total: 0, pages: 1, hasPrevious: false, hasNext: false });
 
   const loadNotifications = async () => {
     try {
-      const items = await getNotifications();
-      setNotifications(items);
+      const result = await getNotificationsPage({ page, pageSize: 20 });
+      setNotifications(result.notifications);
+      setPagination(result.pagination);
       setSelectedIds([]);
       setError("");
     } catch (err) {
@@ -41,7 +44,7 @@ export default function Notifications() {
 
   useEffect(() => {
     loadNotifications();
-  }, []);
+  }, [page]);
 
   const handleRead = async (item) => {
     if (item.isRead) return;
@@ -196,6 +199,13 @@ export default function Notifications() {
           </div>
         )}
       </div>
+      {pagination.pages > 1 && (
+        <div className="flex items-center justify-between gap-3">
+          <Button variant="outline" disabled={!pagination.hasPrevious} onClick={() => setPage((value) => Math.max(1, value - 1))}>Previous</Button>
+          <p className="text-xs text-muted-foreground">Page {pagination.page} of {pagination.pages} · {pagination.total} notifications</p>
+          <Button variant="outline" disabled={!pagination.hasNext} onClick={() => setPage((value) => value + 1)}>Next</Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -191,6 +191,54 @@ def test_staff_override_obeys_its_own_expiry_month():
     assert portal.apply_setup_values({"riskAllowance": 0}, setup, "staff-1", "2026-04")["riskAllowance"] == 100
 
 
+def test_expired_setup_actively_clears_copied_recurring_values():
+    setup = portal.normalize_payroll_setup({
+        "status": "approved",
+        "configured": True,
+        "effectiveMonth": "2026-01",
+        "expiryMonth": "2026-02",
+        "globalValues": {"riskAllowance": 100, "staffWelfare": 20},
+        "approvedVersions": [{
+            "version": 1,
+            "configured": True,
+            "effectiveMonth": "2026-01",
+            "expiryMonth": "2026-02",
+            "globalValues": {"riskAllowance": 100, "staffWelfare": 20},
+        }],
+    })
+    prepared = portal.apply_setup_values(
+        {"riskAllowance": 100, "staffWelfare": 20, "basicSalary": 3000},
+        setup,
+        "staff-1",
+        "2026-03",
+    )
+    assert prepared["riskAllowance"] == 0
+    assert prepared["staffWelfare"] == 0
+    assert prepared["basicSalary"] == 3000
+
+
+def test_new_setup_must_supersede_latest_approved_effective_month():
+    versions = [{"version": 1, "configured": True, "effectiveMonth": "2026-08", "expiryMonth": ""}]
+    with pytest.raises(ValueError, match="must start after"):
+        portal.validate_proposed_period(versions, "2026-08", "")
+    with pytest.raises(ValueError, match="must start after"):
+        portal.validate_proposed_period(versions, "2026-07", "")
+    portal.validate_proposed_period(versions, "2026-09", "2026-12")
+
+
+def test_pagination_clamps_page_and_reports_metadata():
+    rows, metadata = portal.paginate(list(range(23)), page=9, page_size=10)
+    assert rows == [20, 21, 22]
+    assert metadata == {
+        "page": 3,
+        "pageSize": 10,
+        "total": 23,
+        "pages": 3,
+        "hasPrevious": True,
+        "hasNext": False,
+    }
+
+
 def test_payroll_setup_impact_is_read_only(monkeypatch):
     base = {field: 0 for field in portal.PAYROLL_MANUAL_FIELDS}
     base.update({"staffRecordId": "staff-1", "staffId": "BCB-001", "fullName": "Test Staff", "basicSalary": 1000})

@@ -116,6 +116,7 @@ export default function PayrollSetupPage() {
     setBusy('save');
     try {
       const response = await savePayrollSetup({
+        expectedVersion: data.setup.version,
         effectiveMonth,
         expiryMonth,
         globalValues: Object.fromEntries(Object.entries(globalValues).map(([key, value]) => [key, value === '' ? null : Number(value)])),
@@ -135,7 +136,7 @@ export default function PayrollSetupPage() {
   const submit = async () => {
     setBusy('submit');
     try {
-      const response = await submitPayrollSetup();
+      const response = await submitPayrollSetup(data.setup.version);
       hydrate(response);
       setConfirmAction('');
       toast.success('The setup is locked and waiting for a different approver.', { title: 'Submitted for approval' });

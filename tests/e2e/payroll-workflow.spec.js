@@ -215,6 +215,113 @@ test('staff to payroll approval, PDF, private bulk email, and correction workflo
   expect(revision.batch.revisesBatchId).toBe(batchId);
 });
 
+test('salary setup draft, impact, independent approval, expiry reset, and overlap protection', async ({ page }, testInfo) => {
+  const mobile = testInfo.project.name.includes('mobile');
+  const suffix = mobile ? 'mobile' : 'desktop';
+  const effectiveMonth = mobile ? '2029-01' : '2028-01';
+  const expiryMonth = mobile ? '2029-02' : '2028-02';
+  const expiredMonth = mobile ? '2029-03' : '2028-03';
+
+  await login(page, 'e2e.finance@bawjiasecommunitybank.com');
+  const staffResult = await api(page, '/staff-records', {
+    method: 'POST',
+    body: {
+      fullName: `Setup Test ${suffix}`,
+      staffId: `SETUP-${mobile ? 'M' : 'D'}-001`,
+      department: 'FINANCE',
+      position: 'Finance Assistant',
+      branch: 'HEAD OFFICE',
+      phone: '0202000001',
+      email: `setup.${suffix}@bawjiasecommunitybank.com`,
+      employmentStatus: 'active',
+      reason: 'Salary setup approval workflow test',
+    },
+  });
+  const batch = await api(page, '/payroll-batches', {
+    method: 'POST',
+    body: { period: effectiveMonth, name: `Setup ${suffix} Payroll`, sourceBatchId: '' },
+  });
+  const setupBefore = await api(page, '/payroll-setup');
+  const saved = await api(page, '/payroll-setup', {
+    method: 'POST',
+    body: {
+      expectedVersion: setupBefore.setup.version,
+      effectiveMonth,
+      expiryMonth,
+      reason: 'Temporary approved risk allowance for workflow testing',
+      globalValues: {
+        supervisionAllowance: 0,
+        riskAllowance: 150,
+        responsibilityAllowance: 0,
+        entertainmentAllowance: 0,
+        fuelTransportAllowance: 0,
+        rentUtilityAllowance: 0,
+        staffWelfare: 0,
+        icuDues: 0,
+      },
+      staffOverrides: [{
+        staffRecordId: staffResult.record.id,
+        effectiveMonth,
+        expiryMonth,
+        reason: 'Temporary individual responsibility assignment',
+        values: { responsibilityAllowance: 75 },
+      }],
+    },
+  });
+  expect(saved.setup.status).toBe('draft');
+  expect(saved.impact.affectedBatches).toBe(1);
+  expect(saved.impact.affectedStaffEntries).toBeGreaterThan(0);
+  const submitted = await api(page, '/payroll-setup/submit', {
+    method: 'POST',
+    body: { expectedVersion: saved.setup.version },
+  });
+  expect(submitted.setup.status).toBe('submitted');
+
+  await page.goto('/payroll/setup');
+  await expect(page.getByText(/setup status:/i)).toContainText(/submitted/i);
+  await expect(page.getByRole('heading', { name: /impact preview/i })).toBeVisible();
+
+  await switchAccount(page, 'e2e.approver@bawjiasecommunitybank.com');
+  await page.goto('/payroll/setup');
+  await expect(page.getByRole('heading', { name: /independent approval decision/i })).toBeVisible();
+  const approved = await api(page, '/payroll-setup/decision', {
+    method: 'POST',
+    body: { decision: 'approve', comments: 'Verified by automated independent approver' },
+  });
+  expect(approved.setup.status).toBe('approved');
+  expect(approved.updatedBatches).toBe(1);
+  const updatedBatch = await api(page, `/payroll-batches/${batch.batch.id}`);
+  const staffEntry = updatedBatch.batch.entries.find((entry) => entry.staffRecordId === staffResult.record.id);
+  expect(staffEntry.riskAllowance).toBe(150);
+  expect(staffEntry.responsibilityAllowance).toBe(75);
+
+  await switchAccount(page, 'e2e.finance@bawjiasecommunitybank.com');
+  const expiredBatch = await api(page, '/payroll-batches', {
+    method: 'POST',
+    body: { period: expiredMonth, name: `Expired Setup ${suffix} Payroll`, sourceBatchId: batch.batch.id },
+  });
+  const expiredEntry = expiredBatch.batch.entries.find((entry) => entry.staffRecordId === staffResult.record.id);
+  expect(expiredEntry.riskAllowance).toBe(0);
+  expect(expiredEntry.responsibilityAllowance).toBe(0);
+  expect(expiredBatch.batch.payrollSetupExpiredReset).toBe(true);
+
+  const opened = await api(page, '/payroll-setup/lock', {
+    method: 'POST',
+    body: { locked: false, reason: 'Open overlap protection test draft' },
+  });
+  await expect(api(page, '/payroll-setup', {
+    method: 'POST',
+    body: {
+      expectedVersion: opened.setup.version,
+      effectiveMonth,
+      expiryMonth,
+      reason: 'Attempt unsafe overlapping setup period',
+      globalValues: opened.setup.globalValues,
+      staffOverrides: [],
+    },
+  })).rejects.toThrow(/must start after the latest approved setup/i);
+});
+
 test('small-phone navigation remains usable at 320 pixels', async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes('mobile'), 'Small-phone check belongs to the mobile project');
   await page.setViewportSize({ width: 320, height: 568 });
